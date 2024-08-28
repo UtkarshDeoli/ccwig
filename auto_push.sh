@@ -15,5 +15,5 @@ if [[ $(git status --porcelain) ]]; then
   git pull
   git push
 else
-  echo "No changes to commit."
+  echo "No New changes to commit."
 fi
