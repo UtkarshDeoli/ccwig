@@ -1,6 +1,4 @@
-## CCWIG
-
-CCWIG -> C Compiler Written in Go
+## CCWIG -> C Compiler Written in Go
 
 > I am starting this project on 2024-08-28 
 > The Code will be written on a Raspberry pi zero 2W 
