@@ -21,3 +21,4 @@
       3. `go version`
       all done
 
+Testing the auto push 
