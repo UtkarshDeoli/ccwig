@@ -6,7 +6,7 @@ if [[ $(git status --porcelain) ]]; then
   git add .
 
   # Commit changes
-  git commit -m "Schedled Commit on $(date)"
+  git commit -m "Auto Push with changes $(date)"
 
   # Push changes to the remote repository
   git pull
