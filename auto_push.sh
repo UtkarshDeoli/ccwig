@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Navigate to your project directory
-cd ~/Documents/Projects/ccwig
-
 # Check for changes
 if [[ $(git status --porcelain) ]]; then
   # Add changes to the staging area
