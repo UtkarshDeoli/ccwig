@@ -1,1 +1,17 @@
-auto_push.sh
+# Build output
+/bin/
+/ccwig
+/ccwig-*
+*.exe
+
+# Go test and coverage artefacts
+*.test
+coverage.txt
+coverage.html
+coverage.out
+
+# Editor and OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/

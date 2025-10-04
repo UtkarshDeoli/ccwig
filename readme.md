@@ -1,8 +1,31 @@
-## CCWIG -> C Compiler Written in Go
+## CCWIG -> C-like Compiler Written in Go
 
-> I am starting this project on 2024-08-28 
-> The Code will be written on a Raspberry pi zero 2W 
+> I am starting this project on 2024-08-28
+> The Code will be written on a Raspberry pi zero 2W
 > Just to maybe challange myself and prove that a complex level project can be made in simplest machine (Cost of a raspberry pi zero 2 W at this time in india is around 1.5k rupees or roughly 15 dollars)
+
+CCWIG is a from-scratch implementation of a small C-like language: a hand-written
+lexer, a recursive-descent parser, and a tree-walking evaluator, with a CLI and a
+REPL on top. It is roughly 3,100 lines of Go behind 2,500 lines of tests, and has
+no third-party dependencies — the module requires nothing but the standard
+library.
+
+**A note on the name.** The title says "compiler", but what is implemented here is
+an *interpreter* — the syntax tree is walked directly and there is no code
+generation, no bytecode, and no `.c` input. That was the plan in Day 1 (see the
+"three main parts of an interpreter" item below). Compiling real C, or adding a
+bytecode backend to this language, is future work.
+
+```sh
+make build
+./bin/ccwig examples/fizzbuzz.cw
+./bin/ccwig                      # interactive REPL
+./bin/ccwig -e 'print(1 + 2);'
+```
+
+See [docs/LANGUAGE.md](docs/LANGUAGE.md) for the full language reference and
+[examples/](examples/) for runnable programs.
+
 ---
 ### 🛠️ To-Do: Build a Go Interpreter/Compiler in 1 Week
 
@@ -13,98 +36,157 @@
   - Variables, loops, conditionals.
   - Structs, interfaces, functions.
   - All basic Stuff (Go as deep as you want to)
-- [ ] Learn the three main parts of an interpreter:
+- [x] Learn the three main parts of an interpreter:
   - Lexical Analysis (Tokenizer).
   - Parsing (Abstract Syntax Tree).
   - Evaluation (Executing AST).
-- [ ] Define the minimal language features(Yet to be finalized):
-  - Arithmetic operations (`+`, `-`, `*`, `/`).
+- [x] Define the minimal language features:
+  - Arithmetic operations (`+`, `-`, `*`, `/`, `%`).
   - Variables and assignments.
   - Conditional statements (`if`, `else`).
   - Print statements for output.
+
+  The language ended up a little larger than the minimum: `while` and `for`
+  loops, functions and closures, arrays, floats and strings, `&&` / `||`, and
+  the comparison and assignment operators. The feature set is recorded in
+  [docs/LANGUAGE.md](docs/LANGUAGE.md).
+
 ## **Day 2: Implement the Lexer**
-- [ ] Define token types (`NUMBER`, `IDENTIFIER`, `OPERATOR`, `KEYWORD`, etc.).
-- [ ] Write the `Lexer` function to tokenize input.
-- [ ] Handle whitespace and invalid input gracefully.
-- [ ] Test the lexer with simple examples:
+- [x] Define token types (`NUMBER`, `IDENTIFIER`, `OPERATOR`, `KEYWORD`, etc.).
+- [x] Write the `Lexer` function to tokenize input.
+- [x] Handle whitespace and invalid input gracefully.
+- [x] Test the lexer with simple examples:
   - Input: `x = 5 + 3`.
   - Output: A list of tokens.
 
+  Tokens and positions live in `internal/token`, the scanner in `internal/lexer`.
+  It tracks line and column by *character*, not by byte, so a multi-byte
+  character such as `é` does not shift the columns that follow it.
+
 ## **Day 3: Implement the Parser**
-- [ ] Define AST nodes using structs:
+- [x] Define AST nodes using structs:
   - Binary expressions.
   - Variable declarations.
   - Literals.
-- [ ] Write a recursive descent parser to build an AST:
+- [x] Write a recursive descent parser to build an AST:
   - Parse expressions like `1 + 2`.
   - Handle assignments like `x = 5`.
-- [ ] Test the parser:
+- [x] Test the parser:
   - Input: `x = 1 + 2`.
   - Output: A tree-like structure (AST).
 
+  Expressions use precedence climbing, so `1 + 2 * 3` groups correctly; see
+  `internal/parser`. `ccwig -ast -e '1 + 2 * 3;'` prints the tree.
+
 ## **Day 4: Implement the Interpreter**
-- [ ] Write an `Eval` function to evaluate the AST.
-- [ ] Store variables in a map for assignments.
-- [ ] Handle:
+- [x] Write an `Eval` function to evaluate the AST.
+- [x] Store variables in a map for assignments.
+- [x] Handle:
   - Arithmetic operations.
   - Variable lookups.
   - Print statements.
-- [ ] Add basic error handling for:
+- [x] Add basic error handling for:
   - Invalid syntax.
   - Undefined variables.
-- [ ] Test the interpreter:
+- [x] Test the interpreter:
   - Input: `x = 10; y = x + 5; print(y)`.
   - Output: `15`.
 
+  The evaluator is in `internal/evaluator`, runtime values in `internal/object`.
+
 ## **Day 5: Add Basic Features**
-- [ ] Add support for conditionals:
-  ```monkey
+- [x] Add support for conditionals:
+
+  ```c
   if x > 5 {
-      print("greater")
+      print("greater");
   } else {
-      print("less")
+      print("less");
   }
+  ```
 
-(Optional) Add looping constructs like while or for.
+- [x] (Optional) Add looping constructs like while or for.
+- [x] (Optional) Implement functions and function calls.
 
-(Optional) Implement functions and function calls.
+  Functions close over the scope they are defined in, so counters, recursion
+  and callbacks all work — see `examples/closures.cw`.
 
 ## **Day 6: Polish and Extend**
 
-- [ ] Improve error messages for:
+- [x] Improve error messages for:
   - Lexing errors.
   - Parsing errors.
   - Runtime errors.
 
-- [ ] Build a simple CLI or REPL:
+- [x] Build a simple CLI or REPL:
 
   - Allow users to run files or interactively input code.
 
-  - Enhance syntax with:
-      - Comments.
-      - String literals.
-      - Additional operators.
+- [x] Enhance syntax with:
+  - Comments.
+  - String literals.
+  - Additional operators.
+
+  Syntax errors are all reported at once, with positions, and the program does
+  not run. Runtime errors report `file:line:col: message`, for example
+  `examples/errors/type-mismatch.cw:3:9: type mismatch: INTEGER + STRING`.
 
 ## **Day 7: Refine and Test**
   ### Test edge cases:
-  - [ ] Invalid input.
-  - [ ] Large expressions.
-  - [ ] Edge scenarios.
+  - [x] Invalid input.
+  - [x] Large expressions.
+  - [x] Edge scenarios.
+
+  `go test ./...` runs 148 test functions (227 cases counting subtests) across
+  the lexer, parser, evaluator, REPL and CLI. `integration_test.go` runs every
+  program in `examples/` and compares its
+  output against a checked-in `.out` file, and asserts that each program in
+  `examples/errors/` fails with the expected message and names the file.
 
 ### Optimize code:
 
-  - [ ]  Simplify logic.
-  - [ ]  Add comments for readability.
+  - [x]  Simplify logic.
+  - [x]  Add comments for readability.
 
 ### Document the project:
 
-  - [ ]  Write basic documentation for the language.
+  - [x]  Write basic documentation for the language.
+
+  See [docs/LANGUAGE.md](docs/LANGUAGE.md). A runaway loop is stopped by a step
+  limit rather than hanging, so `while true {}` fails with a diagnosable
+  message.
 
 ### Package the code:
-  - [ ] Create a executable
+  - [x] Create a executable
+
+  `make build` writes `bin/ccwig`. `make pi` cross-compiles for the Raspberry Pi
+  Zero 2 W (`linux/arm64`) and the original Zero (`linux/armv6`, GOARM=6).
 ---
 
+### Project layout
+
+| Path | Contents |
+| --- | --- |
+| `internal/token` | Token kinds and source positions |
+| `internal/lexer` | Source text to tokens |
+| `internal/ast` | Syntax tree nodes |
+| `internal/parser` | Tokens to syntax tree |
+| `internal/object` | Runtime values and the environment |
+| `internal/evaluator` | Tree-walking evaluation and built-ins |
+| `internal/interp` | Facade over lex/parse/eval, plus the REPL |
+| `cmd/ccwig` | Command-line entry point |
+
+### Make targets
+
+| Target | Does |
+| --- | --- |
+| `make` | `check` then `build` |
+| `make test` | `go test ./...` |
+| `make check` | `gofmt`, `go vet`, `go test` |
+| `make run` | Build and start the REPL |
+| `make examples` | Run every program in `examples/` |
+| `make pi` | Cross-compile for the Raspberry Pi |
+| `make help` | List every target |
 
 ### Timeline
 Check [Blog](https://www.utkarshdeoli.in/blog) for complete timeline
-
