@@ -137,16 +137,50 @@ See [docs/LANGUAGE.md](docs/LANGUAGE.md) for the full language reference and
   - [x] Large expressions.
   - [x] Edge scenarios.
 
-  `go test ./...` runs 148 test functions (227 cases counting subtests) across
+  `go test ./...` runs 178 test functions (710 cases counting subtests) across
   the lexer, parser, evaluator, REPL and CLI. `integration_test.go` runs every
   program in `examples/` and compares its
   output against a checked-in `.out` file, and asserts that each program in
   `examples/errors/` fails with the expected message and names the file.
 
+  Seven fuzz targets cover the three phases — that the lexer always advances and
+  always gives a token a position, that the parser always terminates, that
+  evaluation is deterministic and always returns a value, and that a program and
+  its rendering behave identically. `make fuzz` runs them.
+
+  The parser is also held to a round-trip property: re-parsing a rendered tree
+  must produce the same tree again. Both the REPL and `-ast` show a rendering of
+  the tree, so a rendering the parser cannot read back is a real bug, and this
+  one property found most of the defects listed below. `make bench` runs the
+  benchmarks.
+
 ### Optimize code:
 
   - [x]  Simplify logic.
   - [x]  Add comments for readability.
+  - [x]  Measure the hot paths and make them faster.
+
+  `make bench` runs the benchmarks. Against the interpreter as first written,
+  evaluation is 23–36% faster and allocates roughly a fifth fewer objects,
+  mostly from three changes: a scope keeps its bindings in parallel slices
+  instead of a map, operators dispatch on the concrete type of their operands
+  rather than on type-name strings, and `true`, `false` and `null` are shared
+  instances rather than a fresh allocation each time.
+
+  | Benchmark | Before | After | |
+  | --- | ---: | ---: | ---: |
+  | Loop body | 194,991 ns | 125,480 ns | −36% |
+  | While loop | 182,198 ns | 130,593 ns | −28% |
+  | Function calls | 2,260,440 ns | 1,734,911 ns | −23% |
+  | Array index | 314,663 ns | 231,056 ns | −27% |
+  | String concatenation | 43,167 ns | 32,900 ns | −24% |
+  | Built-in calls | 123,790 ns | 90,742 ns | −27% |
+  | Nested scope lookup | 60,417 ns | 39,299 ns | −35% |
+  | Arithmetic | 423 ns | 396 ns | −6% |
+
+  Parsing is about 2% slower for the same input, because the parser now counts
+  how deeply an expression nests so that pathological source reports an error
+  instead of exhausting the stack and killing the process.
 
 ### Document the project:
 
@@ -154,7 +188,9 @@ See [docs/LANGUAGE.md](docs/LANGUAGE.md) for the full language reference and
 
   See [docs/LANGUAGE.md](docs/LANGUAGE.md). A runaway loop is stopped by a step
   limit rather than hanging, so `while true {}` fails with a diagnosable
-  message.
+  message. Runaway recursion and pathologically nested source are stopped the
+  same way; the three limits and why none of them covers the others are
+  described under [Limits](docs/LANGUAGE.md#limits).
 
 ### Package the code:
   - [x] Create a executable

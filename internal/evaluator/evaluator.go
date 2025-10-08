@@ -22,6 +22,16 @@ import (
 // instead of hanging the process.
 const DefaultMaxSteps = 50_000_000
 
+// DefaultMaxDepth bounds how deeply user function calls may nest.
+//
+// Evaluation recurses once per nested call, so the depth a program can reach
+// is bounded by the Go stack, and exhausting the stack is a fatal error that
+// recover cannot catch. This limit stops a runaway recursion while there is
+// still stack left to report the problem. It is deliberately far larger than
+// any hand-written program needs, because reaching it almost always means the
+// program is wrong rather than merely deep.
+const DefaultMaxDepth = 10_000
+
 // Builtin names, kept in one place so the docs and error messages agree.
 const (
 	builtinLen   = "len"
@@ -46,14 +56,18 @@ type Evaluator struct {
 	// MaxSteps bounds the number of AST nodes evaluated per program run.
 	// Zero means DefaultMaxSteps.
 	MaxSteps int
+	// MaxDepth bounds how deeply user function calls may nest. Zero means
+	// DefaultMaxDepth.
+	MaxDepth int
 
 	builtins map[string]*object.Builtin
 	steps    int
+	depth    int
 }
 
 // New returns an Evaluator writing program output to out.
 func New(out io.Writer) *Evaluator {
-	e := &Evaluator{Out: out, MaxSteps: DefaultMaxSteps}
+	e := &Evaluator{Out: out, MaxSteps: DefaultMaxSteps, MaxDepth: DefaultMaxDepth}
 	e.builtins = e.newBuiltins()
 	return e
 }
@@ -61,12 +75,11 @@ func New(out io.Writer) *Evaluator {
 // Eval evaluates node in env and returns the resulting value.
 func (e *Evaluator) Eval(node ast.Node, env *object.Environment) object.Object {
 	if node == nil {
-		return &object.Null{}
+		return object.NullValue()
 	}
 
-	e.steps++
-	if e.MaxSteps > 0 && e.steps > e.MaxSteps {
-		return object.NewError(node.Pos(), "step limit of %d exceeded (possible infinite loop)", e.MaxSteps)
+	if e.spendStep() {
+		return e.stepLimitError(node.Pos())
 	}
 
 	switch node := node.(type) {
@@ -100,7 +113,7 @@ func (e *Evaluator) Eval(node ast.Node, env *object.Environment) object.Object {
 
 	case *ast.ReturnStatement:
 		if node.ReturnValue == nil {
-			return &object.ReturnValue{Value: &object.Null{}}
+			return &object.ReturnValue{Value: object.NullValue()}
 		}
 		val := e.Eval(node.ReturnValue, env)
 		if isError(val) {
@@ -124,10 +137,10 @@ func (e *Evaluator) Eval(node ast.Node, env *object.Environment) object.Object {
 		return &object.String{Value: node.Value}
 
 	case *ast.BooleanLiteral:
-		return &object.Boolean{Value: node.Value}
+		return object.BooleanOf(node.Value)
 
 	case *ast.NullLiteral:
-		return &object.Null{}
+		return object.NullValue()
 
 	case *ast.Identifier:
 		return e.evalIdentifier(node, env)
@@ -187,10 +200,32 @@ func (e *Evaluator) Eval(node ast.Node, env *object.Environment) object.Object {
 
 // ------------------------------------------------------------------- programs
 
+// spendStep accounts for one unit of work, reporting whether the step budget is
+// now spent.
+//
+// Evaluation is metered here rather than only where an AST node is visited,
+// because visiting nodes is not the only way to loop forever. `for ;; { }` has
+// no condition to evaluate and a body that evaluates nothing at all, so a
+// loop that only counted nodes would run until the process was killed. Counting
+// the iteration itself closes that hole for every loop, whatever its body does.
+//
+// Counting is kept apart from reporting so that the common case is an
+// increment and a comparison. The position is only needed for the message, and
+// asking the node for it on every step costs more than the step itself.
+func (e *Evaluator) spendStep() bool {
+	e.steps++
+	return e.MaxSteps > 0 && e.steps > e.MaxSteps
+}
+
+// stepLimitError reports an exhausted step budget at pos.
+func (e *Evaluator) stepLimitError(pos token.Position) *object.Error {
+	return object.NewError(pos, "step limit of %d exceeded (possible infinite loop)", e.MaxSteps)
+}
+
 // evalProgram evaluates each statement in order. Evaluation stops at the
 // first error or return value.
 func (e *Evaluator) evalProgram(program *ast.Program, env *object.Environment) object.Object {
-	var result object.Object = &object.Null{}
+	var result object.Object = object.NullValue()
 
 	for _, stmt := range program.Statements {
 		value := e.Eval(stmt, env)
@@ -239,12 +274,16 @@ func (e *Evaluator) evalBlockStatement(block *ast.BlockStatement, env *object.En
 // and gives the body a fresh child scope on every iteration.
 func (e *Evaluator) evalWhileStatement(node *ast.WhileStatement, env *object.Environment) object.Object {
 	for {
+		if e.spendStep() {
+			return e.stepLimitError(node.Token.Pos)
+		}
+
 		condition := e.Eval(node.Condition, env)
 		if isError(condition) {
 			return condition
 		}
 		if !isTruthy(condition) {
-			return &object.Null{}
+			return object.NullValue()
 		}
 
 		result := e.evalLoopBody(node.Body, env)
@@ -267,13 +306,17 @@ func (e *Evaluator) evalForStatement(node *ast.ForStatement, env *object.Environ
 	}
 
 	for {
+		if e.spendStep() {
+			return e.stepLimitError(node.Token.Pos)
+		}
+
 		if node.Condition != nil {
 			condition := e.Eval(node.Condition, loopEnv)
 			if isError(condition) {
 				return condition
 			}
 			if !isTruthy(condition) {
-				return &object.Null{}
+				return object.NullValue()
 			}
 		}
 
@@ -331,7 +374,7 @@ func (e *Evaluator) evalIfExpression(node *ast.IfExpression, env *object.Environ
 
 	switch alt := node.Alternative.(type) {
 	case nil:
-		return &object.Null{}
+		return object.NullValue()
 	case *ast.BlockStatement:
 		return unwrapBlockResult(e.evalBlockStatement(alt, env))
 	case *ast.IfExpression:
@@ -345,7 +388,7 @@ func (e *Evaluator) evalIfExpression(node *ast.IfExpression, env *object.Environ
 // into null.
 func unwrapBlockResult(result object.Object) object.Object {
 	if result == nil {
-		return &object.Null{}
+		return object.NullValue()
 	}
 	return result
 }
@@ -443,25 +486,53 @@ func (e *Evaluator) evalInfixOperation(tok token.Token, operator string, left, r
 		return nativeToBoolean(!objectsEqual(left, right))
 	}
 
-	switch {
-	case left.Type() == object.INTEGER && right.Type() == object.INTEGER:
-		return e.evalIntegerInfix(tok, operator, left.(*object.Integer), right.(*object.Integer))
+	// Dispatch on the concrete types rather than on Type() names. This is the
+	// hottest path in the evaluator, and a type switch on a handful of pointer
+	// types is a few comparisons, where asking each operand for its type name
+	// and comparing strings is several.
+	switch l := left.(type) {
+	case *object.Integer:
+		switch r := right.(type) {
+		case *object.Integer:
+			return evalIntegerInfix(tok, operator, l, r)
+		case *object.Float:
+			return evalFloatInfix(tok, operator, l, r)
+		}
 
-	case isNumber(left) && isNumber(right):
-		return e.evalFloatInfix(tok, operator, left, right)
+	case *object.Float:
+		switch r := right.(type) {
+		case *object.Integer:
+			return evalFloatInfix(tok, operator, l, r)
+		case *object.Float:
+			return evalFloatInfix(tok, operator, l, r)
+		}
 
-	case left.Type() == object.STRING && right.Type() == object.STRING:
-		return e.evalStringInfix(tok, operator, left.(*object.String), right.(*object.String))
-
-	case left.Type() != right.Type():
-		return object.NewError(tok.Pos, "type mismatch: %s %s %s", left.Type(), operator, right.Type())
-
-	default:
-		return object.NewError(tok.Pos, "unknown operator: %s %s %s", left.Type(), operator, right.Type())
+	case *object.String:
+		if r, ok := right.(*object.String); ok {
+			return evalStringInfix(tok, operator, l, r)
+		}
 	}
+
+	// Nothing matched, so this is a failure. Naming the types is only needed
+	// here, which keeps it off the successful path.
+	return e.infixTypeError(tok, operator, left, right)
 }
 
-func (e *Evaluator) evalIntegerInfix(tok token.Token, operator string, left, right *object.Integer) object.Object {
+// infixTypeError explains why an operator could not be applied.
+//
+// Mixing types that can never combine is reported as a mismatch, which names
+// both types; an operator that is simply undefined for a pair of equal types —
+// `%` on two FLOATs, say — is reported as an unknown operator.
+func (e *Evaluator) infixTypeError(tok token.Token, operator string, left, right object.Object) object.Object {
+	if left.Type() != right.Type() {
+		return object.NewError(tok.Pos, "type mismatch: %s %s %s",
+			left.Type(), operator, right.Type())
+	}
+	return object.NewError(tok.Pos, "unknown operator: %s %s %s",
+		left.Type(), operator, right.Type())
+}
+
+func evalIntegerInfix(tok token.Token, operator string, left, right *object.Integer) object.Object {
 	switch operator {
 	case "+":
 		return &object.Integer{Value: left.Value + right.Value}
@@ -495,7 +566,7 @@ func (e *Evaluator) evalIntegerInfix(tok token.Token, operator string, left, rig
 // evalFloatInfix handles an operation where at least one operand is a FLOAT.
 // Mixed INTEGER/FLOAT operands are promoted, so the original objects are kept
 // around for error messages.
-func (e *Evaluator) evalFloatInfix(tok token.Token, operator string, left, right object.Object) object.Object {
+func evalFloatInfix(tok token.Token, operator string, left, right object.Object) object.Object {
 	l, r := toFloat(left), toFloat(right)
 
 	switch operator {
@@ -524,7 +595,7 @@ func (e *Evaluator) evalFloatInfix(tok token.Token, operator string, left, right
 	}
 }
 
-func (e *Evaluator) evalStringInfix(tok token.Token, operator string, left, right *object.String) object.Object {
+func evalStringInfix(tok token.Token, operator string, left, right *object.String) object.Object {
 	switch operator {
 	case "+":
 		return &object.String{Value: left.Value + right.Value}
@@ -603,7 +674,7 @@ func (e *Evaluator) evalIndexExpression(tok token.Token, left, index object.Obje
 	// Reading outside the array yields null rather than failing, so callers
 	// can test for an absent element with `== null`.
 	if idx.Value < 0 || idx.Value >= int64(len(arr.Elements)) {
-		return &object.Null{}
+		return object.NullValue()
 	}
 
 	return arr.Elements[idx.Value]
@@ -614,19 +685,7 @@ func (e *Evaluator) evalIndexExpression(tok token.Token, left, index object.Obje
 func (e *Evaluator) applyFunction(tok token.Token, fn object.Object, args []object.Object) object.Object {
 	switch fn := fn.(type) {
 	case *object.Function:
-		if len(args) != len(fn.Parameters) {
-			return object.NewError(tok.Pos, "wrong number of arguments: want %d, got %d", len(fn.Parameters), len(args))
-		}
-
-		// Parameters are bound in a scope enclosed by the function's
-		// definition environment, which is what makes closures work.
-		callEnv := object.NewEnclosedEnvironment(fn.Env)
-		for i, param := range fn.Parameters {
-			callEnv.Set(param.Value, args[i])
-		}
-
-		result := e.Eval(fn.Body, callEnv)
-		return unwrapReturn(result)
+		return e.applyUserFunction(tok, fn, args)
 
 	case *object.Builtin:
 		result := fn.Fn(args)
@@ -642,12 +701,45 @@ func (e *Evaluator) applyFunction(tok token.Token, fn object.Object, args []obje
 	}
 }
 
+// applyUserFunction calls a function defined in CCWIG source.
+//
+// This is the one place where evaluation recurses without an AST to bound it,
+// so it is where the call depth is metered. The counter is unwound by hand
+// rather than with defer, which would be a cost on every call.
+func (e *Evaluator) applyUserFunction(tok token.Token, fn *object.Function, args []object.Object) object.Object {
+	if len(args) != len(fn.Parameters) {
+		return object.NewError(tok.Pos, "wrong number of arguments: want %d, got %d", len(fn.Parameters), len(args))
+	}
+
+	limit := e.MaxDepth
+	if limit <= 0 {
+		limit = DefaultMaxDepth
+	}
+	if e.depth >= limit {
+		return object.NewError(tok.Pos,
+			"maximum call depth of %d exceeded (possible infinite recursion)", limit)
+	}
+
+	// Parameters are bound in a scope enclosed by the function's
+	// definition environment, which is what makes closures work.
+	callEnv := object.NewEnclosedEnvironment(fn.Env)
+	for i, param := range fn.Parameters {
+		callEnv.Set(param.Value, args[i])
+	}
+
+	e.depth++
+	result := e.Eval(fn.Body, callEnv)
+	e.depth--
+
+	return unwrapReturn(result)
+}
+
 // unwrapReturn strips a ReturnValue produced by a function body. A body that
 // falls off the end yields null.
 func unwrapReturn(result object.Object) object.Object {
 	switch result := result.(type) {
 	case nil:
-		return &object.Null{}
+		return object.NullValue()
 	case *object.ReturnValue:
 		return result.Value
 	default:
@@ -667,7 +759,7 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 					parts = append(parts, a.Inspect())
 				}
 				fmt.Fprintln(e.Out, strings.Join(parts, " "))
-				return &object.Null{}
+				return object.NullValue()
 			},
 		},
 
@@ -722,7 +814,7 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 					return object.NewError(token.Position{}, "argument to `first` must be an array, got %s", args[0].Type())
 				}
 				if len(arr.Elements) == 0 {
-					return &object.Null{}
+					return object.NullValue()
 				}
 				return arr.Elements[0]
 			},
@@ -739,7 +831,7 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 					return object.NewError(token.Position{}, "argument to `last` must be an array, got %s", args[0].Type())
 				}
 				if len(arr.Elements) == 0 {
-					return &object.Null{}
+					return object.NullValue()
 				}
 				return arr.Elements[len(arr.Elements)-1]
 			},
@@ -756,7 +848,7 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 					return object.NewError(token.Position{}, "argument to `rest` must be an array, got %s", args[0].Type())
 				}
 				if len(arr.Elements) == 0 {
-					return &object.Null{}
+					return object.NullValue()
 				}
 				rest := make([]object.Object, len(arr.Elements)-1)
 				copy(rest, arr.Elements[1:])
@@ -817,27 +909,42 @@ func isTruthy(obj object.Object) bool {
 
 // objectsEqual implements `==`. Values of different types are never equal, so
 // this never fails.
+//
+// Like the arithmetic path, it dispatches on concrete types rather than on type
+// names, and INTEGER compares against FLOAT numerically so that `1 == 1.0`
+// holds.
 func objectsEqual(left, right object.Object) bool {
-	// Numbers compare across INTEGER and FLOAT so that `1 == 1.0` holds.
-	if isNumber(left) && isNumber(right) {
-		return toFloat(left) == toFloat(right)
-	}
-
-	if left.Type() != right.Type() {
-		return false
-	}
-
-	switch left := left.(type) {
+	switch l := left.(type) {
 	case *object.Integer:
-		return left.Value == right.(*object.Integer).Value
+		switch r := right.(type) {
+		case *object.Integer:
+			return l.Value == r.Value
+		case *object.Float:
+			return float64(l.Value) == r.Value
+		}
+		return false
+
 	case *object.Float:
-		return left.Value == right.(*object.Float).Value
+		switch r := right.(type) {
+		case *object.Integer:
+			return l.Value == float64(r.Value)
+		case *object.Float:
+			return l.Value == r.Value
+		}
+		return false
+
 	case *object.String:
-		return left.Value == right.(*object.String).Value
+		r, ok := right.(*object.String)
+		return ok && l.Value == r.Value
+
 	case *object.Boolean:
-		return left.Value == right.(*object.Boolean).Value
+		r, ok := right.(*object.Boolean)
+		return ok && l.Value == r.Value
+
 	case *object.Null:
-		return true
+		_, ok := right.(*object.Null)
+		return ok
+
 	default:
 		// Functions, builtins and arrays compare by identity.
 		return left == right
@@ -849,10 +956,6 @@ func isError(obj object.Object) bool {
 		return false
 	}
 	return obj.Type() == object.ERROR
-}
-
-func isNumber(obj object.Object) bool {
-	return obj.Type() == object.INTEGER || obj.Type() == object.FLOAT
 }
 
 func toFloat(obj object.Object) float64 {
@@ -867,5 +970,5 @@ func toFloat(obj object.Object) float64 {
 }
 
 func nativeToBoolean(value bool) *object.Boolean {
-	return &object.Boolean{Value: value}
+	return object.BooleanOf(value)
 }

@@ -114,7 +114,16 @@ func (s *ExpressionStatement) String() string {
 	if s.Expression == nil {
 		return ""
 	}
-	return s.Expression.String()
+
+	// The semicolon is not decoration: it is what stops this statement from
+	// running into the next one when several are rendered together.
+	//
+	// The grammar has no newline rule, so an expression ends only where the
+	// following token cannot continue it. Two adjacent expression statements
+	// rendered without a separator would therefore be read back as one:
+	// `(a = 1)` followed by `(b = 2)` is a call of the first, not two
+	// statements.
+	return s.Expression.String() + ";"
 }
 
 // BlockStatement is a brace-delimited sequence of statements and introduces a
@@ -165,8 +174,22 @@ type ForStatement struct {
 func (s *ForStatement) statementNode()       {}
 func (s *ForStatement) TokenLiteral() string { return s.Token.Literal }
 func (s *ForStatement) Pos() token.Position  { return s.Token.Pos }
+
+// String renders the loop in the language's own `for` syntax, so that the
+// rendering can be read back by the parser.
+//
+// Each clause is separated by the semicolon that the syntax requires, and an
+// omitted clause renders as an empty clause rather than disappearing. Both
+// matter: `for ; cond; post` has to keep the separators to say that the init
+// clause is absent, and a statement clause brings its own trailing semicolon
+// which must not be mistaken for a clause separator.
 func (s *ForStatement) String() string {
-	return fmt.Sprintf("for (%s %s %s) %s", stmtString(s.Init), exprString(s.Condition), stmtString(s.Post), s.Body.String())
+	header := fmt.Sprintf("for %s; %s; %s",
+		clauseString(s.Init), exprString(s.Condition), clauseString(s.Post))
+
+	// An omitted post clause leaves the header ending in a space, which would
+	// otherwise double up against the one before the body.
+	return strings.TrimRight(header, " ") + " " + s.Body.String()
 }
 
 // FunctionStatement is a named function declaration:
@@ -221,7 +244,34 @@ type FloatLiteral struct {
 func (e *FloatLiteral) expressionNode()      {}
 func (e *FloatLiteral) TokenLiteral() string { return e.Token.Literal }
 func (e *FloatLiteral) Pos() token.Position  { return e.Token.Pos }
-func (e *FloatLiteral) String() string       { return strconv.FormatFloat(e.Value, 'g', -1, 64) }
+func (e *FloatLiteral) String() string       { return formatFloat(e.Value) }
+
+// formatFloat renders a float as a CCWIG float literal.
+//
+// Go's shortest form cannot be used here: above a certain magnitude it switches
+// to an exponent, and this language has none, so 1000000.0 was rendered as
+// "1e+06" — which the parser read back as the integer 1 followed by "e + 6".
+// The form used below never has an exponent, whatever the magnitude.
+//
+// A whole number is still written with a fractional part, so that a float
+// always reads back as a float. Without it 1000000.0 would render as
+// "1000000", an INTEGER, and re-reading a rendering would silently change the
+// type of the value.
+//
+// The precision is the shortest that round-trips, so the fractional part is
+// ".0" for a whole number and carries no trailing noise otherwise.
+//
+// Only finite values can reach here. A float in the tree is always a value
+// written in the source, never the result of arithmetic, and a literal larger
+// than a float can hold is rejected by the parser rather than read as an
+// infinity.
+func formatFloat(v float64) string {
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	if !strings.ContainsRune(s, '.') {
+		s += ".0"
+	}
+	return s
+}
 
 // StringLiteral is a double-quoted string.
 type StringLiteral struct {
@@ -232,7 +282,42 @@ type StringLiteral struct {
 func (e *StringLiteral) expressionNode()      {}
 func (e *StringLiteral) TokenLiteral() string { return e.Token.Literal }
 func (e *StringLiteral) Pos() token.Position  { return e.Token.Pos }
-func (e *StringLiteral) String() string       { return strconv.Quote(e.Value) }
+func (e *StringLiteral) String() string       { return quoteString(e.Value) }
+
+// quoteString renders a string as a CCWIG string literal.
+//
+// Go's own quoting cannot be used here: it writes a NUL as \x00 and a bell as
+// \a, and this language defines neither escape, so the rendered source was
+// rejected by its own lexer. Only the escapes the language actually has may
+// appear, and anything else is written through as the character itself, which
+// the lexer accepts verbatim.
+func quoteString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		case 0:
+			b.WriteString(`\0`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+
+	return b.String()
+}
 
 // BooleanLiteral is `true` or `false`.
 type BooleanLiteral struct {
@@ -379,11 +464,17 @@ func paramsString(params []*Identifier) string {
 	return "(" + strings.Join(names, ", ") + ")"
 }
 
-func stmtString(s Statement) string {
+// clauseString renders one clause of a `for` header, without the statement
+// terminator it would normally carry.
+//
+// A statement renders with its own trailing semicolon, but in a loop header
+// the semicolons are the clause separators, so a clause must not supply one of
+// its own or the header would gain an empty clause.
+func clauseString(s Statement) string {
 	if s == nil {
 		return ""
 	}
-	return s.String()
+	return strings.TrimSuffix(s.String(), ";")
 }
 
 func exprString(e Expression) string {

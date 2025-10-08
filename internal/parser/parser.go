@@ -49,6 +49,19 @@ var precedences = map[token.Type]int{
 	token.LBRACKET: precIndex,
 }
 
+// MaxNestingDepth bounds how deeply expressions may nest.
+//
+// Parsing an expression recurses once per nesting level, and Go cannot recover
+// from exhausting the goroutine stack: it is a fatal error that aborts the
+// process rather than a panic that recover could catch. Without a limit,
+// input such as two million open parentheses takes the whole process down, so
+// the parser stops descending and reports the problem while it still can.
+//
+// The limit is far beyond anything a person writes. A left-associative chain
+// such as `1 + 1 + 1 + ...` is not affected however long it is, because it
+// iterates rather than recurses.
+const MaxNestingDepth = 1000
+
 // Parser turns tokens into an AST.
 type Parser struct {
 	l *lexer.Lexer
@@ -57,11 +70,19 @@ type Parser struct {
 	peekToken token.Token
 
 	errors []string
+
+	// depth is the current expression nesting level and maxDepth the level at
+	// which parsing gives up.
+	depth    int
+	maxDepth int
+	// reportedDepth keeps an over-deep expression from recording one error per
+	// level of nesting, which would bury the message under thousands of copies.
+	reportedDepth bool
 }
 
 // New returns a Parser reading from l, positioned on the first token.
 func New(l *lexer.Lexer) *Parser {
-	p := &Parser{l: l}
+	p := &Parser{l: l, maxDepth: MaxNestingDepth}
 
 	// Read two tokens so that curToken and peekToken are both populated.
 	p.nextToken()
@@ -411,7 +432,36 @@ func (p *Parser) consumeOptionalSemicolon() {
 
 // --------------------------------------------------------------- expressions
 
+// parseExpression parses an expression whose operators bind more tightly than
+// precedence.
+//
+// It is the recursion point of the expression grammar, so it is where nesting
+// is metered: a level that would take the parser past maxDepth is refused
+// rather than attempted, and the refusal is reported once.
 func (p *Parser) parseExpression(precedence int) ast.Expression {
+	if p.depth >= p.maxDepth {
+		p.reportTooDeep()
+		return nil
+	}
+
+	p.depth++
+	expr := p.parseExpressionLevel(precedence)
+	p.depth--
+
+	return expr
+}
+
+// reportTooDeep records that the expression nests too deeply, at most once per
+// parse.
+func (p *Parser) reportTooDeep() {
+	if p.reportedDepth {
+		return
+	}
+	p.reportedDepth = true
+	p.addError(p.curToken.Pos, "expression nests too deeply (limit %d)", p.maxDepth)
+}
+
+func (p *Parser) parseExpressionLevel(precedence int) ast.Expression {
 	prefix := p.prefixParseFn(p.curToken.Type)
 	if prefix == nil {
 		p.addError(p.curToken.Pos, "unexpected %s, expected an expression", describe(p.curToken))
@@ -419,6 +469,12 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	}
 
 	left := prefix()
+	if left == nil {
+		// The prefix parse failed, so there is no left operand. Continuing
+		// into the infix loop would build a node with a nil operand, which
+		// the tree would then carry until something tried to render it.
+		return nil
+	}
 
 	for !p.peekTokenIs(token.SEMICOLON) && precedence < p.peekPrecedence() {
 		infix := p.infixParseFn(p.peekToken.Type)

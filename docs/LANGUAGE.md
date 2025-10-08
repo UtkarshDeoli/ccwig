@@ -84,6 +84,9 @@ Notes:
 - `==` and `!=` are defined between every pair of types and never fail.
   Comparing different types yields `false`, so `x == null` is always safe.
   Numbers compare across `INTEGER` and `FLOAT`, so `1 == 1.0` is `true`.
+  Strings compare by their text. Arrays and functions are compared by identity,
+  not by contents, so two separately written `[1, 2]` arrays are not equal —
+  `xs == xs` is true while `[1, 2] == [1, 2]` is false.
 - `&&` and `||` short-circuit and yield a boolean. A guard such as
   `i < len(xs) && xs[i] != null` is therefore safe.
 
@@ -272,9 +275,35 @@ Runtime errors are values internally, but they halt the program: an error is
 never silently ignored to let a later statement carry on. Output written
 before the failure has already been delivered.
 
-The interpreter also stops a program that evaluates more than 50 million
-nodes, so a runaway `while true {}` fails with a diagnosable message instead
-of hanging.
+## Limits
+
+A program that will not finish is stopped rather than left to hang or to take
+the process down with it. Three limits do that, and each reports an ordinary
+error naming the problem:
+
+| Limit | Value | Catches |
+| --- | --- | --- |
+| Steps | 50,000,000 | `while true {}` and every other loop that never ends |
+| Call depth | 10,000 | `fn f(n) { return f(n + 1); }` and other runaway recursion |
+| Expression nesting | 1,000 | Source such as two million nested parentheses |
+
+The three exist for different reasons, so none of them covers the others.
+
+A loop is metered per iteration, not per node visited, because a loop can spin
+without evaluating anything at all — `for ;; { }` has no condition to evaluate
+and a body that evaluates nothing.
+
+The call depth limit is what makes infinite recursion diagnosable. Without it
+the interpreter exhausts the Go stack, and a stack overflow is a fatal error
+that cannot be recovered from: the process dies with a runtime dump instead of
+printing a message.
+
+Expression nesting is bounded while parsing because parsing an expression
+recurses once per level. A left-associative chain such as `1 + 1 + 1 + ...` is
+unaffected however long it is, since it iterates rather than recurses.
+
+The step and call depth limits are generous, so reaching either one almost
+always means the program is wrong rather than merely large.
 
 ## The REPL
 

@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -510,7 +511,7 @@ b();
 
 func TestFunctionsAreHigherOrderValues(t *testing.T) {
 	assertInteger(t, eval(t, "let apply = fn(f, x) { return f(x); }; apply(fn(x) { x * 2; }, 21);"), 42)
-	assertInspect(t, eval(t, "fn(x) { x; }"), "fn(x) { x }")
+	assertInspect(t, eval(t, "fn(x) { x; }"), "fn(x) { x; }")
 	assertInteger(t, eval(t, "let fs = [fn() { 1; }, fn() { 2; }]; fs[1]();"), 2)
 }
 
@@ -797,7 +798,7 @@ func TestInspectOfEveryObjectType(t *testing.T) {
 		{"null", "null"},
 		{`"hi"`, "hi"},
 		{"[1, 2]", "[1, 2]"},
-		{"fn(x) { x }", "fn(x) { x }"},
+		{"fn(x) { x; }", "fn(x) { x; }"},
 		{"len", "builtin function: len"},
 	}
 
@@ -964,4 +965,342 @@ print("result: " + "done");
 			}
 		})
 	}
+}
+
+// ------------------------------------------------------- recursion limits
+//
+// A tree-walking evaluator recurses once per nested call, so the depth a
+// program can reach is bounded by the Go stack. Go cannot recover from
+// exhausting it, so the evaluator has to refuse to descend past a documented
+// limit and say so, rather than finding the limit by dying.
+
+// TestDeepButLegitimateRecursionIsAllowed guards the call depth limit against
+// being set so low that ordinary recursive programs stop working.
+func TestDeepButLegitimateRecursionIsAllowed(t *testing.T) {
+	const depth = 1000
+
+	src := fmt.Sprintf(`
+fn countdown(n) {
+    if n <= 0 { return 0; }
+    return 1 + countdown(n - 1);
+}
+countdown(%d);
+`, depth)
+
+	assertInteger(t, eval(t, src), depth)
+}
+
+// TestRecursionBeyondTheLimitIsRejected keeps a program that recurses past the
+// limit from taking the process down with it. The limit is generous, so a
+// program that reaches it is almost certainly a bug in the program.
+func TestRecursionBeyondTheLimitIsRejected(t *testing.T) {
+	const depth = 50_000
+
+	src := fmt.Sprintf(`
+fn countdown(n) {
+    if n <= 0 { return 0; }
+    return 1 + countdown(n - 1);
+}
+countdown(%d);
+`, depth)
+
+	assertError(t, eval(t, src), "call depth")
+}
+
+// TestRunawayRecursionDoesNotCrashTheProcess is the regression guard for the
+// most serious failure this evaluator had: `fn f(n) { return f(n + 1); }`
+// exhausted the stack and aborted the process with a Go runtime dump. The step
+// limit does not help here, because the stack dies long before the step
+// counter reaches its budget.
+func TestRunawayRecursionDoesNotCrashTheProcess(t *testing.T) {
+	assertError(t, eval(t, `
+fn f(n) { return f(n + 1); }
+f(0);
+`), "call depth")
+
+	// Mutual recursion must be caught too: each function on its own looks
+	// innocent, and only the pair is runaway.
+	assertError(t, eval(t, `
+fn ping(n) { return pong(n + 1); }
+fn pong(n) { return ping(n + 1); }
+ping(0);
+`), "call depth")
+
+	// The same, reached through an anonymous function.
+	assertError(t, eval(t, `
+let f = fn(n) { return f(n + 1); };
+f(0);
+`), "call depth")
+}
+
+// TestCallDepthLimitIsConfigurable keeps the limit a policy rather than a
+// hard-wired constraint, the way MaxSteps already is.
+func TestCallDepthLimitIsConfigurable(t *testing.T) {
+	const depth = 50_000
+
+	src := fmt.Sprintf(`
+fn countdown(n) {
+    if n <= 0 { return 0; }
+    return 1 + countdown(n - 1);
+}
+countdown(%d);
+`, depth)
+
+	ev := New(io.Discard)
+	ev.MaxDepth = depth * 2
+
+	assertInteger(t, evalWith(t, src, ev), depth)
+}
+
+// TestRecursionDepthDoesNotLeakBetweenCalls checks that the depth counter is
+// unwound on the way out. A counter that only ever grows would make a long
+// REPL session fail once its cumulative calls passed the limit.
+func TestRecursionDepthDoesNotLeakBetweenCalls(t *testing.T) {
+	ev := New(io.Discard)
+	ev.MaxDepth = 50
+
+	src := `
+fn countdown(n) {
+    if n <= 0 { return 0; }
+    return 1 + countdown(n - 1);
+}
+countdown(40);
+`
+
+	// 40 deep, well inside the limit of 50, but enough repetitions would
+	// exceed it if the counter were never reset.
+	for i := 0; i < 20; i++ {
+		assertInteger(t, evalWith(t, src, ev), 40)
+	}
+}
+
+// TestLoopsThatEvaluateNothingStillHonourTheStepLimit is the regression guard
+// for a `for` loop the step limit could not see. `for ;; { }` has no condition
+// to evaluate and a body that evaluates nothing, so a limit that only counted
+// visited AST nodes never advanced and the loop ran forever: the process had
+// to be killed. Every loop iteration is now counted, whatever its body does.
+func TestLoopsThatEvaluateNothingStillHonourTheStepLimit(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"for with no condition and an empty body", "for ;; { }"},
+		{"for with no clauses and an empty body", "for ; ; { }"},
+		{"for with an init but no condition", "for let i = 0; ; { }"},
+		{"for with a post but no condition", "let i = 0; for ; ; i = i + 1 { }"},
+		{"while true with an empty body", "while true { }"},
+		{"nested empty loops", "for ;; { for ;; { } }"},
+		{"for whose body is only declarations", "for ;; { let x = 1; }"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev := New(io.Discard)
+			ev.MaxSteps = 1000
+
+			got := evalWith(t, tt.src, ev)
+			assertError(t, got, "step limit")
+		})
+	}
+}
+
+// TestStepLimitIsNotSpentByOrdinaryLoops keeps the per-iteration step from
+// making the budget so expensive that reasonable programs run out of it.
+func TestStepLimitIsNotSpentByOrdinaryLoops(t *testing.T) {
+	ev := New(io.Discard)
+	ev.MaxSteps = 100_000
+
+	assertInteger(t, evalWith(t, `
+let total = 0;
+for let i = 0; i < 500; i = i + 1 {
+    total = total + i;
+}
+total;
+`, ev), 124750)
+}
+
+// TestManyToplevelBindingsStayVisible is the regression guard for a program
+// that lost every binding past the ninth.
+//
+// A scope kept its names in a slice and built a name index once it grew past a
+// threshold. Adding a further name appended to the slice without updating the
+// index, and lookups consult the index once it exists, so the tenth top-level
+// `let` in a program was written and then reported as undefined. Nine bindings
+// worked and ten did not, which is why a wide program — not a deep one — was
+// what exposed it.
+func TestManyToplevelBindingsStayVisible(t *testing.T) {
+	const count = 50
+
+	var src strings.Builder
+	for i := 0; i < count; i++ {
+		fmt.Fprintf(&src, "let v%d = %d;\n", i, i)
+	}
+	// Read them back in reverse, so that a binding is not found merely because
+	// something next to it was.
+	for i := count - 1; i >= 0; i-- {
+		fmt.Fprintf(&src, "print(v%d);\n", i)
+	}
+
+	var want strings.Builder
+	for i := count - 1; i >= 0; i-- {
+		fmt.Fprintf(&want, "%d\n", i)
+	}
+
+	if got := evalOutput(t, src.String()); got != want.String() {
+		t.Errorf("wrong output for %d top-level bindings:\n--- want ---\n%s--- got ---\n%s",
+			count, want.String(), got)
+	}
+}
+
+// TestAssignmentReachesAWideToplevelScope checks that a block can assign to one
+// of many top-level variables.
+//
+// The same lost binding made assignment fall back to declaring the name in the
+// block, so the assignment appeared to succeed while the variable outside kept
+// its old value — a wrong answer rather than an error.
+func TestAssignmentReachesAWideToplevelScope(t *testing.T) {
+	const count = 20
+
+	var src strings.Builder
+	for i := 0; i < count; i++ {
+		fmt.Fprintf(&src, "let v%d = %d;\n", i, i)
+	}
+	// Assign to the last one from inside a block, then read it outside.
+	fmt.Fprintf(&src, "{ v%d = 99; }\nprint(v%d);\n", count-1, count-1)
+
+	if got := evalOutput(t, src.String()); got != "99\n" {
+		t.Errorf("assignment did not reach the top-level binding: got %q, want %q", got, "99\n")
+	}
+}
+
+// TestClosureCapturesAWideScope checks that a function defined next to many
+// bindings can still see all of them.
+func TestClosureCapturesAWideScope(t *testing.T) {
+	const count = 30
+
+	var src strings.Builder
+	for i := 0; i < count; i++ {
+		fmt.Fprintf(&src, "let v%d = %d;\n", i, i)
+	}
+	src.WriteString("fn last() { return v29; }\nprint(last());\n")
+
+	if got := evalOutput(t, src.String()); got != "29\n" {
+		t.Errorf("closure could not see a late binding: got %q, want %q", got, "29\n")
+	}
+}
+
+// TestEqualityIsTotalSymmetricAndReflexive checks the three properties the
+// language promises about `==`, over every ordered pair of values rather than
+// the handful of pairs that happened to get written down.
+//
+// They are: that comparing any two values of any two types yields a boolean
+// and never an error; that `a == b` and `b == a` agree; and that `!=` is its
+// negation. Equality is the one operator defined between every pair of types,
+// which is what makes `x == null` safe to write, so it is worth pinning down
+// across the whole cross product instead of case by case.
+func TestEqualityIsTotalSymmetricAndReflexive(t *testing.T) {
+	values := []struct {
+		name string
+		expr string
+	}{
+		{"integer", "1"},
+		{"another integer", "2"},
+		{"float", "1.0"},
+		{"another float", "2.5"},
+		{"a float that is a whole number", "2.0"},
+		{"string", `"1"`},
+		{"another string", `"abc"`},
+		{"empty string", `""`},
+		{"true", "true"},
+		{"false", "false"},
+		{"null", "null"},
+		{"array", "[1, 2]"},
+		{"empty array", "[]"},
+		{"nested array", "[[1], [2]]"},
+		{"function", "fn(x) { x; }"},
+		{"builtin", "len"},
+	}
+
+	// evalBool evaluates an expression that must produce a boolean. Anything
+	// else — including an error value — fails the test.
+	evalBool := func(t *testing.T, name, src string) bool {
+		t.Helper()
+
+		obj := eval(t, src)
+		b, ok := obj.(*object.Boolean)
+		if !ok {
+			t.Fatalf("%s: expected a boolean, got %T (%s)", name, obj, obj.Inspect())
+		}
+		return b.Value
+	}
+
+	for _, a := range values {
+		// Reflexivity: a value equals itself, whatever it is.
+		t.Run("reflexive/"+a.name, func(t *testing.T) {
+			if !evalBool(t, a.name, "let x = "+a.expr+"; x == x;") {
+				t.Errorf("%s is not equal to itself", a.name)
+			}
+			if evalBool(t, a.name, "let x = "+a.expr+"; x != x;") {
+				t.Errorf("%s is not equal to itself, but != says it is not", a.name)
+			}
+		})
+
+		for _, b := range values {
+			t.Run("pair/"+a.name+"/"+b.name, func(t *testing.T) {
+				forward := evalBool(t, "a == b",
+					"let a = "+a.expr+"; let b = "+b.expr+"; a == b;")
+				backward := evalBool(t, "b == a",
+					"let a = "+a.expr+"; let b = "+b.expr+"; b == a;")
+				unequal := evalBool(t, "a != b",
+					"let a = "+a.expr+"; let b = "+b.expr+"; a != b;")
+
+				if forward != backward {
+					t.Errorf("%s == %s is %v but %s == %s is %v",
+						a.name, b.name, forward, b.name, a.name, backward)
+				}
+				if unequal == forward {
+					t.Errorf("%s != %s is %v, which is not the negation of == (%v)",
+						a.name, b.name, unequal, forward)
+				}
+			})
+		}
+	}
+
+	// The pairs the documentation makes a specific promise about.
+	t.Run("values the docs pin down", func(t *testing.T) {
+		yes := []struct {
+			name string
+			src  string
+		}{
+			{"an integer and a float of the same value", "1 == 1.0;"},
+			{"a whole float and an integer", "2.0 == 2;"},
+			{"null and null", "null == null;"},
+			{"two equal strings", `"ab" == "ab";`},
+			{"two equal arrays", "let xs = [1, 2]; xs == xs;"},
+		}
+		for _, tt := range yes {
+			if !evalBool(t, tt.name, tt.src) {
+				t.Errorf("%s: %s is false, want true", tt.name, tt.src)
+			}
+		}
+
+		no := []struct {
+			name string
+			src  string
+		}{
+			{"an integer and a string", `1 == "1";`},
+			{"an integer and null", "1 == null;"},
+			{"a boolean and an integer", "true == 1;"},
+			{"null and false", "null == false;"},
+			{"an array and a string", `[1] == "1";`},
+			{"different integers", "1 == 2;"},
+			{"an integer and an unequal float", "1 == 1.5;"},
+			{"two separately built but equal arrays", "[1, 2] == [1, 2];"},
+		}
+		for _, tt := range no {
+			if evalBool(t, tt.name, tt.src) {
+				t.Errorf("%s: %s is true, want false", tt.name, tt.src)
+			}
+		}
+	})
 }

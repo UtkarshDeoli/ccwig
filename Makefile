@@ -9,7 +9,7 @@ VERSION := 1.0.0
 # enough to be comfortable on a Raspberry Pi Zero.
 LDFLAGS := -s -w
 
-.PHONY: all build install test test-race fmt vet check examples run clean pi help
+.PHONY: all build install test test-race fuzz bench fmt vet check examples run clean pi help
 
 all: check build  ## Format, vet, test and build
 
@@ -26,6 +26,18 @@ test:  ## Run the test suite
 
 test-race:  ## Run the test suite under the race detector
 	go test -race ./...
+
+fuzz:  ## Run every fuzz target for 30s each
+	go test ./internal/lexer/ -run '^$$' -fuzz FuzzNextToken -fuzztime 30s
+	go test ./internal/lexer/ -run '^$$' -fuzz FuzzErrorsArePositioned -fuzztime 30s
+	go test ./internal/parser/ -run '^$$' -fuzz FuzzParseProgram -fuzztime 30s
+	go test ./internal/parser/ -run '^$$' -fuzz FuzzParserTerminates -fuzztime 30s
+	go test ./internal/evaluator/ -run '^$$' -fuzz '^FuzzEval$$' -fuzztime 30s
+	go test ./internal/evaluator/ -run '^$$' -fuzz FuzzEvalIsDeterministic -fuzztime 30s
+	go test ./internal/evaluator/ -run '^$$' -fuzz FuzzRenderingPreservesMeaning -fuzztime 30s
+
+bench:  ## Run every benchmark
+	go test -run '^$$' -bench . -benchmem ./internal/...
 
 fmt:  ## Format all Go source
 	gofmt -l -w .
