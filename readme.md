@@ -137,7 +137,7 @@ See [docs/LANGUAGE.md](docs/LANGUAGE.md) for the full language reference and
   - [x] Large expressions.
   - [x] Edge scenarios.
 
-  `go test ./...` runs 178 test functions (710 cases counting subtests) across
+  `go test ./...` runs 181 test functions (736 cases counting subtests) across
   the lexer, parser, evaluator, REPL and CLI. `integration_test.go` runs every
   program in `examples/` and compares its
   output against a checked-in `.out` file, and asserts that each program in

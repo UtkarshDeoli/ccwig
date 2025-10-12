@@ -55,6 +55,13 @@ A string may not span a line; a newline inside one is an error.
 CCWIG is dynamically typed and does not convert silently. `1 + "2"` is an
 error, not `"12"`; use `str()` to convert deliberately.
 
+Numbers print in full decimal notation, never with an exponent: `1000000.0`
+prints as `1000000`, and `0.0000001` as `0.0000001`. What `print` writes can
+therefore be read back as the number it names, though a float near the bottom
+of the range prints as a long run of zeros. A whole `FLOAT` is written without
+a fractional part, so `1.0 + 3.0` prints as `4`; use `type(v)` if you need to
+tell `4` from `4.0`.
+
 ## Operators
 
 From tightest to loosest binding:

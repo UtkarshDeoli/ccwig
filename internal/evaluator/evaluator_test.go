@@ -807,6 +807,42 @@ func TestInspectOfEveryObjectType(t *testing.T) {
 	}
 }
 
+// TestFloatOutputUsesPlainDecimalNotation checks what a program actually
+// writes for a float.
+//
+// `print` and `str` are how a program shows a number to whoever is reading,
+// and a notation the language itself cannot parse is no use to them: the
+// output of `print(1000000.0)` used to be "1e+06". Whole numbers are written
+// without a fractional part, which is the convention examples/lang.cw
+// documents at its `print(1.5 + 2.5)` line.
+func TestFloatOutputUsesPlainDecimalNotation(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"the value that first exposed it", "print(1000000.0);", "1000000\n"},
+		{"negative", "print(-1000000.0);", "-1000000\n"},
+		{"a whole number keeps no fractional part", "print(1.5 + 2.5);", "4\n"},
+		{"a fraction is unchanged", "print(3.5);", "3.5\n"},
+		{"less than one", "print(0.125);", "0.125\n"},
+		{"small enough to have reached for an exponent", "print(0.0000001);", "0.0000001\n"},
+		{"large enough to have reached for an exponent", "print(1000000000000000000000.0);", "1000000000000000000000\n"},
+		{"a third still rounds to the shortest form", "print(1.0 / 3.0);", "0.3333333333333333\n"},
+		{"str uses the same form", "print(str(1000000.0));", "1000000\n"},
+		{"so does a float inside an array", "print([1.0, 1000000.0]);", "[1, 1000000]\n"},
+		{"and a float read back out of one", "let xs = [1000000.0]; print(xs[0]);", "1000000\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := evalOutput(t, tt.src); got != tt.want {
+				t.Errorf("%s printed %q, want %q", tt.src, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDocumentedBehaviour covers claims made in docs/LANGUAGE.md that the
 // rest of the suite does not otherwise pin down.
 func TestIfIsAnExpression(t *testing.T) {

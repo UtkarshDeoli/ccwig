@@ -51,13 +51,19 @@ type Float struct {
 
 func (f *Float) Type() Type { return FLOAT }
 
-// Inspect renders the float for a reader, using Go's shortest form so that a
-// large or small magnitude stays compact: this is what `print` and `str` show.
+// Inspect renders the float for a reader, in plain decimal at every magnitude:
+// this is what `print` and `str` show.
 //
-// It deliberately differs from the rendering in package ast, which has to
-// produce text the parser can read back and so cannot use an exponent. Here
-// there is no such constraint, and the shortest form is the friendlier one.
-func (f *Float) Inspect() string { return strconv.FormatFloat(f.Value, 'g', -1, 64) }
+// Go's shortest form cannot be used here, because above a certain magnitude it
+// switches to an exponent and `print(1000000.0)` would write "1e+06" — a
+// notation this language has no syntax for, so the output could not be read
+// back as the number it names. The form below never uses one.
+//
+// A whole number is written without a fractional part, so 4.0 prints as "4".
+// This is the one place the rendering deliberately parts company with package
+// ast, which keeps the ".0": there a whole float has to stay a float when it is
+// read back, whereas here the output is for a person to read.
+func (f *Float) Inspect() string { return strconv.FormatFloat(f.Value, 'f', -1, 64) }
 
 // String is a sequence of Unicode code points.
 type String struct {
