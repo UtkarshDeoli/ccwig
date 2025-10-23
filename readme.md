@@ -1,205 +1,156 @@
-## CCWIG -> C-like Compiler Written in Go
+# CCWIG
 
-> I am starting this project on 2024-08-28
-> The Code will be written on a Raspberry pi zero 2W
-> Just to maybe challange myself and prove that a complex level project can be made in simplest machine (Cost of a raspberry pi zero 2 W at this time in india is around 1.5k rupees or roughly 15 dollars)
+CCWIG is a small programming language with a C accent, and this repository is
+the whole of it: a hand-written lexer, a recursive-descent parser and a
+tree-walking evaluator, with a command-line interface and a REPL on top.
 
-CCWIG is a from-scratch implementation of a small C-like language: a hand-written
-lexer, a recursive-descent parser, and a tree-walking evaluator, with a CLI and a
-REPL on top. It is roughly 3,100 lines of Go behind 2,500 lines of tests, and has
-no third-party dependencies — the module requires nothing but the standard
-library.
+It is about 3,500 lines of Go behind 4,700 lines of tests, and it has no
+dependencies at all — the module imports nothing beyond the standard library.
 
-**A note on the name.** The title says "compiler", but what is implemented here is
-an *interpreter* — the syntax tree is walked directly and there is no code
-generation, no bytecode, and no `.c` input. That was the plan in Day 1 (see the
-"three main parts of an interpreter" item below). Compiling real C, or adding a
+**On the name.** CCWIG stands for "C-like Compiler Written in Go", but what is
+here is an *interpreter*: the syntax tree is walked directly, and there is no
+code generation, no bytecode and no `.c` input. Compiling real C, or adding a
 bytecode backend to this language, is future work.
 
+**On the machine.** The project was started on 2024-08-28, and the code is
+written on a Raspberry Pi Zero 2W — a machine that cost about 1.5k rupees
+(roughly 15 dollars) in India at the time. The point was to find out whether a
+project of this size can be built happily on the simplest computer around. So
+far it can.
+
+## Quick start
+
 ```sh
+git clone https://github.com/UtkarshDeoli/ccwig
+cd ccwig
 make build
-./bin/ccwig examples/fizzbuzz.cw
-./bin/ccwig                      # interactive REPL
-./bin/ccwig -e 'print(1 + 2);'
+
+./bin/ccwig examples/fizzbuzz.cw   # run a program
+./bin/ccwig                        # interactive REPL
+./bin/ccwig -e 'print(1 + 2);'     # run a one-liner
 ```
 
-See [docs/LANGUAGE.md](docs/LANGUAGE.md) for the full language reference and
-[examples/](examples/) for runnable programs.
+Nothing needs installing and there is nothing to fetch. `go run ./cmd/ccwig`
+works anywhere `./bin/ccwig` does.
 
----
-### 🛠️ To-Do: Build a Go Interpreter/Compiler in 1 Week
+## Your first program
 
-## **Day 1: Set Up and Learn Core Concepts**
-- [x] Install Go and set up the environment.
-- [x] Test installation using `go version`.
-- [x] Complete [Go Tour](https://tour.golang.org/) to learn basics:
-  - Variables, loops, conditionals.
-  - Structs, interfaces, functions.
-  - All basic Stuff (Go as deep as you want to)
-- [x] Learn the three main parts of an interpreter:
-  - Lexical Analysis (Tokenizer).
-  - Parsing (Abstract Syntax Tree).
-  - Evaluation (Executing AST).
-- [x] Define the minimal language features:
-  - Arithmetic operations (`+`, `-`, `*`, `/`, `%`).
-  - Variables and assignments.
-  - Conditional statements (`if`, `else`).
-  - Print statements for output.
+Here is a complete CCWIG program. It prints the five times table.
 
-  The language ended up a little larger than the minimum: `while` and `for`
-  loops, functions and closures, arrays, floats and strings, `&&` / `||`, and
-  the comparison and assignment operators. The feature set is recorded in
-  [docs/LANGUAGE.md](docs/LANGUAGE.md).
+```c
+// times.cw — the five times table, five rows tall
 
-## **Day 2: Implement the Lexer**
-- [x] Define token types (`NUMBER`, `IDENTIFIER`, `OPERATOR`, `KEYWORD`, etc.).
-- [x] Write the `Lexer` function to tokenize input.
-- [x] Handle whitespace and invalid input gracefully.
-- [x] Test the lexer with simple examples:
-  - Input: `x = 5 + 3`.
-  - Output: A list of tokens.
+// row(n) builds one line of the table: the products of n, space separated.
+fn row(n) {
+    let line = "";
+    for let i = 1; i <= 5; i = i + 1 {
+        line = line + " " + str(n * i);
+    }
+    return line;
+}
 
-  Tokens and positions live in `internal/token`, the scanner in `internal/lexer`.
-  It tracks line and column by *character*, not by byte, so a multi-byte
-  character such as `é` does not shift the columns that follow it.
+for let n = 1; n <= 5; n = n + 1 {
+    print(row(n));
+}
+```
 
-## **Day 3: Implement the Parser**
-- [x] Define AST nodes using structs:
-  - Binary expressions.
-  - Variable declarations.
-  - Literals.
-- [x] Write a recursive descent parser to build an AST:
-  - Parse expressions like `1 + 2`.
-  - Handle assignments like `x = 5`.
-- [x] Test the parser:
-  - Input: `x = 1 + 2`.
-  - Output: A tree-like structure (AST).
+Running it (`./bin/ccwig times.cw`) prints:
 
-  Expressions use precedence climbing, so `1 + 2 * 3` groups correctly; see
-  `internal/parser`. `ccwig -ast -e '1 + 2 * 3;'` prints the tree.
+```
+ 1 2 3 4 5
+ 2 4 6 8 10
+ 3 6 9 12 15
+ 4 8 12 16 20
+ 5 10 15 20 25
+```
 
-## **Day 4: Implement the Interpreter**
-- [x] Write an `Eval` function to evaluate the AST.
-- [x] Store variables in a map for assignments.
-- [x] Handle:
-  - Arithmetic operations.
-  - Variable lookups.
-  - Print statements.
-- [x] Add basic error handling for:
-  - Invalid syntax.
-  - Undefined variables.
-- [x] Test the interpreter:
-  - Input: `x = 10; y = x + 5; print(y)`.
-  - Output: `15`.
+The pieces, one at a time:
 
-  The evaluator is in `internal/evaluator`, runtime values in `internal/object`.
+- `fn row(n) { ... }` defines a function. `row` takes one parameter and
+  `return`s its result. Functions are ordinary values, so they can be stored,
+  passed and returned — which is how closures work.
+- `let line = ""` declares a variable. `let` is block-scoped: a `let` inside
+  braces belongs to those braces and disappears outside them.
+- The `for` loop reads like C, minus the types: `for let i = 1; i <= 5; i = i + 1`
+  is initialise, test, step. There is a `while` too.
+- `line = line + " " + str(n * i)` builds the line by joining strings. CCWIG
+  never converts silently — `1 + "2"` is an error, not `"12"` — so a number
+  joins a string only once `str()` has made that conversion deliberate.
+- `print` writes a line to the terminal. It is how every program in
+  `examples/` shows its work.
 
-## **Day 5: Add Basic Features**
-- [x] Add support for conditionals:
+The same code works in the REPL. Run `./bin/ccwig`, paste the `fn` block, then
+call `row(3)`. Or poke at the language in one line:
 
-  ```c
-  if x > 5 {
-      print("greater");
-  } else {
-      print("less");
-  }
-  ```
+```sh
+./bin/ccwig -e 'let greet = fn(name) { return "hello, " + name; }; print(greet("world"));'
+# hello, world
+```
 
-- [x] (Optional) Add looping constructs like while or for.
-- [x] (Optional) Implement functions and function calls.
+If you would rather be walked through the language a step at a time,
+[docs/GUIDE.md](docs/GUIDE.md) does that, and finishes by building a small
+calculator.
 
-  Functions close over the scope they are defined in, so counters, recursion
-  and callbacks all work — see `examples/closures.cw`.
+## What the language can do
 
-## **Day 6: Polish and Extend**
+`while` and `for` loops; functions and closures; arrays with a small library of
+builtins (`len`, `push`, `fill`, `first`, `last`, `rest`, `type`, `str`);
+integers, floats, strings and booleans; `&&` and `||` that short-circuit; both
+kinds of C-style comment; and `clear` and `sleep`, which let a program redraw
+the terminal frame by frame. Strings are counted by character rather than by
+byte, so multi-byte text lands where it should.
 
-- [x] Improve error messages for:
-  - Lexing errors.
-  - Parsing errors.
-  - Runtime errors.
+Errors are meant to be readable rather than survivable. Syntax errors are all
+reported at once, with positions, and the program does not run. A failure while
+running stops at the first error and reports the file, line and column:
 
-- [x] Build a simple CLI or REPL:
+```
+examples/errors/type-mismatch.cw:3:9: type mismatch: INTEGER + STRING
+```
 
-  - Allow users to run files or interactively input code.
+A program that will not finish is stopped rather than left to hang. Runaway
+loops, runaway recursion and pathologically nested source each hit a limit that
+reports an ordinary error, so `while true {}` prints a message instead of
+taking the machine with it. The three limits are described under
+[Limits](docs/LANGUAGE.md#limits).
 
-- [x] Enhance syntax with:
-  - Comments.
-  - String literals.
-  - Additional operators.
+The full reference is [docs/LANGUAGE.md](docs/LANGUAGE.md).
 
-  Syntax errors are all reported at once, with positions, and the program does
-  not run. Runtime errors report `file:line:col: message`, for example
-  `examples/errors/type-mismatch.cw:3:9: type mismatch: INTEGER + STRING`.
+## Examples
 
-## **Day 7: Refine and Test**
-  ### Test edge cases:
-  - [x] Invalid input.
-  - [x] Large expressions.
-  - [x] Edge scenarios.
+[`examples/`](examples/) holds eight runnable programs, each with its output
+checked in beside it. `make examples` runs them all.
 
-  `go test ./...` runs 181 test functions (736 cases counting subtests) across
-  the lexer, parser, evaluator, REPL and CLI. `integration_test.go` runs every
-  program in `examples/` and compares its
-  output against a checked-in `.out` file, and asserts that each program in
-  `examples/errors/` fails with the expected message and names the file.
+| Program | What it shows |
+| --- | --- |
+| [`hello.cw`](examples/hello.cw) | The smallest thing that runs |
+| [`lang.cw`](examples/lang.cw) | A tour of every feature, in one file |
+| [`fizzbuzz.cw`](examples/fizzbuzz.cw) | The classic, with `%` |
+| [`fib.cw`](examples/fib.cw) | Recursion and string building |
+| [`sorting.cw`](examples/sorting.cw) | Nested loops, and arrays changing under you |
+| [`closures.cw`](examples/closures.cw) | Counters, callbacks, state that stays put |
+| [`polish.cw`](examples/polish.cw) | A prefix-notation calculator, built up in the guide |
+| [`maze.cw`](examples/maze.cw) | A recursive maze carver and two solvers |
 
-  Seven fuzz targets cover the three phases — that the lexer always advances and
-  always gives a token a position, that the parser always terminates, that
-  evaluation is deterministic and always returns a value, and that a program and
-  its rendering behave identically. `make fuzz` runs them.
+The largest of them, [`maze.cw`](examples/maze.cw), carves a maze with a
+recursive backtracker, solves it twice — breadth first and depth first — draws
+both routes, and then checks in the language that each route really is a walk
+from the start to the exit.
 
-  The parser is also held to a round-trip property: re-parsing a rendered tree
-  must produce the same tree again. Both the REPL and `-ast` show a rendering of
-  the tree, so a rendering the parser cannot read back is a real bug, and this
-  one property found most of the defects listed below. `make bench` runs the
-  benchmarks.
+[`examples/animate/maze.cw`](examples/animate/maze.cw) is the same maze animated
+in the terminal, frame by frame (`make animate` plays it), and
+[`examples/huge/maze.cw`](examples/huge/maze.cw) is the same maze grown to a
+hundred and one cells square — ten thousand positions, routes of a few hundred
+steps, and a picture you take in rather than trace (`make huge` runs it). Its
+`SIZE` is the one number it invites you to change, so it deliberately has no
+recorded output to break; what holds it together instead is that it counts what
+it has built, and checks the count.
 
-### Optimize code:
+[`examples/errors/`](examples/errors/) is seven short programs that each fail
+in a specific way, so you can see what the messages look like before you meet
+them for real.
 
-  - [x]  Simplify logic.
-  - [x]  Add comments for readability.
-  - [x]  Measure the hot paths and make them faster.
-
-  `make bench` runs the benchmarks. Against the interpreter as first written,
-  evaluation is 23–36% faster and allocates roughly a fifth fewer objects,
-  mostly from three changes: a scope keeps its bindings in parallel slices
-  instead of a map, operators dispatch on the concrete type of their operands
-  rather than on type-name strings, and `true`, `false` and `null` are shared
-  instances rather than a fresh allocation each time.
-
-  | Benchmark | Before | After | |
-  | --- | ---: | ---: | ---: |
-  | Loop body | 194,991 ns | 125,480 ns | −36% |
-  | While loop | 182,198 ns | 130,593 ns | −28% |
-  | Function calls | 2,260,440 ns | 1,734,911 ns | −23% |
-  | Array index | 314,663 ns | 231,056 ns | −27% |
-  | String concatenation | 43,167 ns | 32,900 ns | −24% |
-  | Built-in calls | 123,790 ns | 90,742 ns | −27% |
-  | Nested scope lookup | 60,417 ns | 39,299 ns | −35% |
-  | Arithmetic | 423 ns | 396 ns | −6% |
-
-  Parsing is about 2% slower for the same input, because the parser now counts
-  how deeply an expression nests so that pathological source reports an error
-  instead of exhausting the stack and killing the process.
-
-### Document the project:
-
-  - [x]  Write basic documentation for the language.
-
-  See [docs/LANGUAGE.md](docs/LANGUAGE.md). A runaway loop is stopped by a step
-  limit rather than hanging, so `while true {}` fails with a diagnosable
-  message. Runaway recursion and pathologically nested source are stopped the
-  same way; the three limits and why none of them covers the others are
-  described under [Limits](docs/LANGUAGE.md#limits).
-
-### Package the code:
-  - [x] Create a executable
-
-  `make build` writes `bin/ccwig`. `make pi` cross-compiles for the Raspberry Pi
-  Zero 2 W (`linux/arm64`) and the original Zero (`linux/armv6`, GOARM=6).
----
-
-### Project layout
+## Project layout
 
 | Path | Contents |
 | --- | --- |
@@ -207,22 +158,73 @@ See [docs/LANGUAGE.md](docs/LANGUAGE.md) for the full language reference and
 | `internal/lexer` | Source text to tokens |
 | `internal/ast` | Syntax tree nodes |
 | `internal/parser` | Tokens to syntax tree |
-| `internal/object` | Runtime values and the environment |
-| `internal/evaluator` | Tree-walking evaluation and built-ins |
-| `internal/interp` | Facade over lex/parse/eval, plus the REPL |
+| `internal/object` | Runtime values and scopes |
+| `internal/evaluator` | Tree-walking evaluation and builtins |
+| `internal/interp` | Lex, parse and evaluate together, plus the REPL |
 | `cmd/ccwig` | Command-line entry point |
 
-### Make targets
+## Make targets
 
 | Target | Does |
 | --- | --- |
 | `make` | `check` then `build` |
+| `make build` | Write `bin/ccwig` |
 | `make test` | `go test ./...` |
 | `make check` | `gofmt`, `go vet`, `go test` |
 | `make run` | Build and start the REPL |
 | `make examples` | Run every program in `examples/` |
+| `make animate` | Play the animated maze example |
+| `make huge` | Run the very large maze example |
+| `make bench` | Run the benchmarks |
+| `make fuzz` | Run every fuzz target for 30s each |
 | `make pi` | Cross-compile for the Raspberry Pi |
 | `make help` | List every target |
 
-### Timeline
-Check [Blog](https://www.utkarshdeoli.in/blog) for complete timeline
+## Tests and benchmarks
+
+`go test ./...` runs 203 test functions, which come to 760 cases counting
+subtests. `integration_test.go` runs all eight programs in `examples/` and
+compares what each prints against its checked-in `.out` file, and checks that
+each program in `examples/errors/` fails with the message it is supposed to and
+names the file it came from.
+
+Two programs in subdirectories are deliberately not among those eight, because
+there is no single output to compare: the animation draws hundreds of frames,
+and the huge maze is meant to be resized. `TestAnimatedExample` and
+`TestHugeExample` check what those two are supposed to do instead.
+
+Seven fuzz targets cover the three phases: that the lexer always advances and
+always gives every token a position, that the parser always terminates, that
+evaluation is deterministic and always returns a value, and that a program and
+its rendering behave identically. `make fuzz` runs them.
+
+The parser is also held to a round-trip property — re-parsing a rendered syntax
+tree must produce that same tree again. Both the REPL and `-ast` show a
+rendering of the tree, so a rendering the parser cannot read back is a real
+bug, and this one property found most of the defects fixed along the way.
+
+`make bench` measures the hot paths. Against the interpreter as first written,
+evaluation is 23–36% faster and allocates about a fifth fewer objects, mostly
+from three changes: a scope keeps its bindings in parallel slices instead of a
+map, operators dispatch on the concrete type of their operands rather than on
+type-name strings, and `true`, `false` and `null` are shared instances rather
+than a fresh allocation each time.
+
+| Benchmark | Before | After | |
+| --- | ---: | ---: | ---: |
+| Loop body | 194,991 ns | 125,480 ns | −36% |
+| While loop | 182,198 ns | 130,593 ns | −28% |
+| Function calls | 2,260,440 ns | 1,734,911 ns | −23% |
+| Array index | 314,663 ns | 231,056 ns | −27% |
+| String concatenation | 43,167 ns | 32,900 ns | −24% |
+| Built-in calls | 123,790 ns | 90,742 ns | −27% |
+| Nested scope lookup | 60,417 ns | 39,299 ns | −35% |
+| Arithmetic | 423 ns | 396 ns | −6% |
+
+Parsing is about 2% slower for the same input than it was, because the parser
+now counts how deeply an expression nests, so that pathological source reports
+an error instead of exhausting the stack and killing the process.
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE).
