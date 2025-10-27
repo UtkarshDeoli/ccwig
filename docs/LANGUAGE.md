@@ -253,6 +253,37 @@ makes it safe to build new arrays inside loops.
 An index must be an integer. Negative or too-large indices read as `null`;
 writing outside the array is an error, because there is nothing to write to.
 
+### Building a large array
+
+`push` copies, which is what makes it safe and also what makes it expensive in a
+loop: growing an array to n elements a push at a time copies about n\*n/2 of
+them. That is invisible at ten elements and unworkable at a hundred thousand,
+which is the size a grid wants to be. `fill(n, v)` allocates all n slots at once
+instead, so an array is built at its full size and then written by index — which
+is the only way to write it anyway, an array not being writable past its end.
+
+```c
+let grid = fill(rows, null);      // the rows, in one allocation
+let r = 0;
+while r < rows {
+    grid[r] = fill(cols, 0);      // each row separate, and just as cheap
+    r = r + 1;
+}
+grid[3][4] = 1;
+```
+
+`fill` repeats the value it was given rather than copying it. Filing an array
+into an array therefore puts that same array in every slot, so
+`fill(rows, fill(cols, 0))` is rows that share their contents and writing
+through one row shows through the others. That is why the loop above calls
+`fill` once per row. Copying the value per slot instead would make
+`fill(rows, row)` cost the whole grid, which is the quadratic cost `fill` is
+there to avoid.
+
+An array of a million elements is a reasonable thing to ask `fill` for. It
+allocates what it is asked for, so asking for far more than the machine has
+will fail as any large allocation fails rather than being caught and reported.
+
 ## Built-in functions
 
 | Call | Result |
@@ -260,13 +291,47 @@ writing outside the array is an error, because there is nothing to write to.
 | `print(a, b, ...)` | Writes its arguments, separated by spaces, followed by a newline. Returns `null`. |
 | `len(s)` / `len(xs)` | Number of characters in a string, or elements in an array. |
 | `push(xs, v)` | A new array with `v` appended. `xs` is not modified. |
+| `fill(n, v)` | A new array of `n` copies of `v`. See [Building a large array](#building-a-large-array). |
 | `first(xs)` | The first element, or `null` if empty. |
 | `last(xs)` | The last element, or `null` if empty. |
 | `rest(xs)` | A new array without the first element, or `null` if empty. |
 | `type(v)` | The name of `v`'s type, as a string. |
 | `str(v)` | `v` rendered as a string. |
+| `clear()` | Erases the screen and moves the cursor home. Returns `null`. |
+| `sleep(ms)` | Waits `ms` milliseconds. Returns `null`. |
 
 Built-ins are ordinary values, so `len` can be stored and passed around.
+
+### Animating the terminal
+
+`clear` and `sleep` are there so that a program can redraw the screen as it
+runs, which is what makes an animation possible:
+
+```c
+let i = 0;
+while i < 10 {
+    clear();
+    print("frame " + str(i));
+    sleep(200);
+    i = i + 1;
+}
+```
+
+`clear` writes the escape sequence that erases the screen and homes the cursor,
+and nothing else — not even a newline. It writes that sequence whether or not
+the output is really a terminal, so redirecting an animated program to a file
+records the escape bytes rather than losing them; `less -R` displays them as
+intended. Building each frame as one string and printing it once, as above,
+keeps a frame from being caught half-drawn, which is what makes it flicker.
+
+`sleep` takes a whole number of milliseconds. A negative one is an error rather
+than being treated as no pause at all, there being no such thing as a pause of
+minus a second. `sleep(0)` is allowed and returns at once, which is the natural
+way to make a pause conditional.
+
+Both are terminal control rather than computation: neither can change what a
+program computes, and a program that uses neither behaves exactly as it did
+before they existed.
 
 ## Errors
 

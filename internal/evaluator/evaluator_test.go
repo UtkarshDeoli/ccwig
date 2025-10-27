@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/UtkarshDeoli/ccwig/internal/lexer"
 	"github.com/UtkarshDeoli/ccwig/internal/object"
@@ -667,6 +668,122 @@ func TestBuiltinPush(t *testing.T) {
 	assertError(t, eval(t, "push([1])"), "wrong number of arguments to `push`: want 2, got 1")
 }
 
+func TestBuiltinFill(t *testing.T) {
+	assertInspect(t, eval(t, "fill(3, 7)"), "[7, 7, 7]")
+	assertInspect(t, eval(t, "fill(1, 0)"), "[0]")
+	assertInspect(t, eval(t, `fill(2, "a")`), "[a, a]")
+	assertInspect(t, eval(t, "fill(0, 7)"), "[]")
+	assertInspect(t, eval(t, "fill(2, null)"), "[null, null]")
+	assertInteger(t, eval(t, "len(fill(5, 0))"), 5)
+}
+
+func TestBuiltinFillMakesAnOrdinaryArray(t *testing.T) {
+	// What `fill` returns is not a special kind of value: it can be indexed,
+	// written to, measured and pushed onto like any other array.
+	assertInteger(t, eval(t, "let xs = fill(4, 0); xs[2] = 9; xs[2]"), 9)
+	assertInspect(t, eval(t, "let xs = fill(4, 0); xs[2] = 9; xs"), "[0, 0, 9, 0]")
+	assertInspect(t, eval(t, "push(fill(2, 0), 1)"), "[0, 0, 1]")
+	assertInspect(t, eval(t, "fill(3, 0)[1]"), "0")
+}
+
+func TestBuiltinFillGivesEachCallItsOwnArray(t *testing.T) {
+	// Two calls are two arrays, so writing to one leaves the other alone.
+	assertInspect(t, eval(t, "let a = fill(3, 0); a[0] = 9; fill(3, 0)"), "[0, 0, 0]")
+	assertInspect(t, eval(t, `
+let a = fill(2, 0);
+let b = fill(2, 0);
+a[0] = 1;
+b;
+`), "[0, 0]")
+}
+
+func TestBuiltinFillRepeatsTheValueItWasGiven(t *testing.T) {
+	// The argument is repeated, not copied: an array filed into a grid is the
+	// same array in every slot, so writing through one row is visible in the
+	// others. This is what makes fill(rows, fill(cols, v)) build a real grid
+	// of distinct rows only because each inner call is a fresh array of its
+	// own — and what makes fill(rows, row) share one row, when that is wanted.
+	assertInspect(t, eval(t, `
+let row = [0, 0];
+let grid = fill(2, row);
+grid[1][0] = 5;
+row;
+`), "[5, 0]")
+}
+
+func TestBuiltinFillOfAnArraySharesItRatherThanCopyingIt(t *testing.T) {
+	// The argument is evaluated once and the result repeated, so filling with
+	// an array puts that same array in every slot. Copying it instead would be
+	// worse than surprising: fill(rows, row) would cost rows*cols, which is the
+	// very quadratic cost that fill exists to remove.
+	assertInspect(t, eval(t, `
+let grid = fill(2, fill(3, 0));
+grid[1][2] = 7;
+grid;
+`), "[[0, 0, 7], [0, 0, 7]]")
+}
+
+func TestBuiltinFillBuildsAGridOfSeparateRows(t *testing.T) {
+	// The idiom for a grid whose rows are independent: allocate the rows with
+	// one call, then fill each of them in turn. That is one call per row, so it
+	// costs no more than a single fill however large a row is.
+	assertInspect(t, eval(t, `
+let grid = fill(2, null);
+let r = 0;
+while r < 2 {
+	grid[r] = fill(3, 0);
+	r = r + 1;
+}
+grid[1][2] = 7;
+grid;
+`), "[[0, 0, 0], [0, 0, 7]]")
+}
+
+func TestBuiltinFillIsAFirstClassValue(t *testing.T) {
+	assertInspect(t, eval(t, "let f = fill; f(2, 1)"), "[1, 1]")
+	assertError(t, eval(t, "let f = fill; f(2)"), "wrong number of arguments to `fill`: want 2, got 1")
+}
+
+func TestBuiltinFillErrors(t *testing.T) {
+	assertError(t, eval(t, "fill(1.5, 0)"), "argument to `fill` must be an integer, got FLOAT")
+	assertError(t, eval(t, `fill("2", 0)`), "argument to `fill` must be an integer, got STRING")
+	assertError(t, eval(t, "fill(true, 0)"), "argument to `fill` must be an integer, got BOOLEAN")
+	assertError(t, eval(t, "fill([2], 0)"), "argument to `fill` must be an integer, got ARRAY")
+	assertError(t, eval(t, "fill(-1, 0)"), "argument to `fill` must not be negative, got -1")
+	assertError(t, eval(t, "fill(-100, 0)"), "argument to `fill` must not be negative, got -100")
+	assertError(t, eval(t, "fill()"), "wrong number of arguments to `fill`: want 2, got 0")
+	assertError(t, eval(t, "fill(1)"), "wrong number of arguments to `fill`: want 2, got 1")
+	assertError(t, eval(t, "fill(1, 2, 3)"), "wrong number of arguments to `fill`: want 2, got 3")
+}
+
+func TestBuiltinFillIsNotQuadratic(t *testing.T) {
+	// The reason `fill` exists rather than a loop around `push`: `push` copies
+	// the whole array on every call, so filling n slots a push at a time copies
+	// about n*n/2 elements.
+	//
+	// The slot count and the bound are both chosen from measurements of that
+	// loop, rather than picked to look round. It fills 50,000 slots in 3.7s,
+	// 100,000 in 21.6s and 200,000 in 84.2s - four times the work for twice the
+	// slots, as quadratic growth looks. Extrapolated to the 400,000 used here
+	// that is about five and a half minutes, some thirty times over the bound,
+	// so a `fill` that copied per element fails this rather than scraping past
+	// it on a quick machine. The bound is loose in the other direction on
+	// purpose: allocating 400,000 slots takes milliseconds, so no real
+	// implementation comes within two thousand times of it, and a slower
+	// machine cannot turn this test red on its own.
+	//
+	// A larger count would separate the two further and is tempting for it, but
+	// the separation is already many orders of magnitude and all a larger count
+	// buys is a longer wait before a broken `fill` is reported.
+	const slots = 400_000
+
+	start := time.Now()
+	assertInteger(t, eval(t, "len(fill(400000, 0))"), slots)
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("filling %d slots took %v; `fill` is meant to allocate once, not to copy per element", slots, elapsed)
+	}
+}
+
 func TestBuiltinFirstLastRest(t *testing.T) {
 	assertInteger(t, eval(t, "first([1, 2, 3])"), 1)
 	assertInteger(t, eval(t, "last([1, 2, 3])"), 3)
@@ -901,6 +1018,85 @@ func TestBuiltinErrorsNameTheBuiltin(t *testing.T) {
 	assertError(t, eval(t, "rest(1)"), "argument to `rest` must be an array, got INTEGER")
 	assertError(t, eval(t, "type()"), "wrong number of arguments to `type`: want 1, got 0")
 	assertError(t, eval(t, "str()"), "wrong number of arguments to `str`: want 1, got 0")
+}
+
+// --------------------------------------------------------- terminal builtins
+
+// clearSequence is what clear() is expected to write: erase the screen, then
+// put the cursor back in the top-left corner.
+const clearSequence = "\x1b[2J\x1b[H"
+
+func TestClearWritesTheTerminalClearSequence(t *testing.T) {
+	if got := evalOutput(t, "clear()"); got != clearSequence {
+		t.Errorf("expected %q, got %q", clearSequence, got)
+	}
+}
+
+func TestClearReturnsNull(t *testing.T) {
+	assertInspect(t, eval(t, "clear()"), "null")
+}
+
+func TestClearIsNotAPrint(t *testing.T) {
+	// clear() is terminal control, not output: it must write the sequence and
+	// nothing else — no trailing newline, no separating space.
+	if got := evalOutput(t, `clear(); print("after");`); got != clearSequence+"after\n" {
+		t.Errorf("expected %q, got %q", clearSequence+"after\n", got)
+	}
+}
+
+func TestClearTakesNoArguments(t *testing.T) {
+	assertError(t, eval(t, "clear(1)"), "wrong number of arguments to `clear`: want 0, got 1")
+}
+
+func TestSleepReturnsNull(t *testing.T) {
+	assertInspect(t, eval(t, "sleep(0)"), "null")
+}
+
+func TestSleepPausesForAtLeastTheRequestedTime(t *testing.T) {
+	const pause = 40 * time.Millisecond
+
+	start := time.Now()
+	eval(t, "sleep(40)")
+	if elapsed := time.Since(start); elapsed < pause {
+		t.Errorf("sleep(40) returned after %v, expected it to wait at least %v", elapsed, pause)
+	}
+}
+
+func TestSleepZeroDoesNotPause(t *testing.T) {
+	// sleep(0) is the useful way to make a pause conditional, so it has to be
+	// cheap rather than a real (if short) wait.
+	start := time.Now()
+	eval(t, "sleep(0)")
+	if elapsed := time.Since(start); elapsed > 20*time.Millisecond {
+		t.Errorf("sleep(0) took %v, expected it to return at once", elapsed)
+	}
+}
+
+func TestSleepRejectsDurationsThatAreNotIntegers(t *testing.T) {
+	assertError(t, eval(t, `sleep("40")`), "argument to `sleep` must be an integer, got STRING")
+	assertError(t, eval(t, "sleep(1.5)"), "argument to `sleep` must be an integer, got FLOAT")
+	assertError(t, eval(t, "sleep()"), "wrong number of arguments to `sleep`: want 1, got 0")
+	assertError(t, eval(t, "sleep(1, 2)"), "wrong number of arguments to `sleep`: want 1, got 2")
+}
+
+func TestSleepRejectsNegativeDurations(t *testing.T) {
+	// A negative pause has no meaning, in the same way that `5.0 % 2` has
+	// none: the language reports it rather than quietly treating it as zero.
+	assertError(t, eval(t, "sleep(-1)"), "argument to `sleep` must not be negative, got -1")
+}
+
+func TestTerminalBuiltinsAreFirstClassValues(t *testing.T) {
+	assertInspect(t, eval(t, "let f = clear; f()"), "null")
+	assertInspect(t, eval(t, "let f = sleep; f(0)"), "null")
+}
+
+func TestSleepComposesWithLoops(t *testing.T) {
+	// The shape the animation uses: pause between frames, driven by a loop.
+	start := time.Now()
+	eval(t, "let i = 0; while i < 3 { sleep(15); i = i + 1; }")
+	if elapsed := time.Since(start); elapsed < 45*time.Millisecond {
+		t.Errorf("three sleep(15) calls took %v, expected at least %v", elapsed, 45*time.Millisecond)
+	}
 }
 
 // --------------------------------------------------------------- integration

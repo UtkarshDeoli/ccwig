@@ -9,7 +9,7 @@ VERSION := 1.0.0
 # enough to be comfortable on a Raspberry Pi Zero.
 LDFLAGS := -s -w
 
-.PHONY: all build install test test-race fuzz bench fmt vet check examples run clean pi help
+.PHONY: all build install test test-race fuzz bench fmt vet check examples animate huge run clean pi help
 
 all: check build  ## Format, vet, test and build
 
@@ -52,6 +52,12 @@ examples: build  ## Run every example program
 		echo "=== $$f ==="; \
 		./$(BIN_DIR)/$(BINARY) $$f || exit 1; \
 	done
+
+animate: build  ## Play the animated maze example
+	./$(BIN_DIR)/$(BINARY) examples/animate/maze.cw
+
+huge: build  ## Run the very large maze example
+	./$(BIN_DIR)/$(BINARY) examples/huge/maze.cw
 
 run: build  ## Build and start the REPL
 	./$(BIN_DIR)/$(BINARY)

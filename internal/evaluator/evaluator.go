@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/UtkarshDeoli/ccwig/internal/ast"
 	"github.com/UtkarshDeoli/ccwig/internal/object"
@@ -36,18 +37,26 @@ const DefaultMaxDepth = 10_000
 const (
 	builtinLen   = "len"
 	builtinPush  = "push"
+	builtinFill  = "fill"
 	builtinFirst = "first"
 	builtinLast  = "last"
 	builtinRest  = "rest"
 	builtinType  = "type"
 	builtinStr   = "str"
 	builtinPrint = "print"
+	builtinClear = "clear"
+	builtinSleep = "sleep"
 )
 
 // BuiltinNames lists the built-in functions in documentation order.
 var BuiltinNames = []string{
-	builtinPrint, builtinLen, builtinPush, builtinFirst, builtinLast, builtinRest, builtinType, builtinStr,
+	builtinPrint, builtinLen, builtinPush, builtinFill, builtinFirst, builtinLast, builtinRest, builtinType, builtinStr,
+	builtinClear, builtinSleep,
 }
+
+// clearScreen is what `clear` writes: erase the whole screen, then move the
+// cursor back to the top-left corner so the next frame starts there.
+const clearScreen = "\x1b[2J\x1b[H"
 
 // Evaluator evaluates parsed programs. It is not safe for concurrent use.
 type Evaluator struct {
@@ -763,6 +772,54 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 			},
 		},
 
+		builtinClear: {
+			Name: builtinClear,
+			// `clear` erases the screen and homes the cursor, so that the next
+			// thing written starts a fresh frame. It is terminal control rather
+			// than output: nothing else is written, not even a newline.
+			//
+			// It writes the sequence unconditionally, without checking whether
+			// the output is really a terminal. A builtin that quietly did
+			// nothing when it guessed otherwise would be harder to reason
+			// about than one that does exactly what it says, and the escape
+			// bytes are legible in a pager such as `less -R`.
+			Fn: func(args []object.Object) object.Object {
+				if err := expectArgs(builtinClear, args, 0, token.Position{}); err != nil {
+					return err
+				}
+				fmt.Fprint(e.Out, clearScreen)
+				return object.NullValue()
+			},
+		},
+
+		builtinSleep: {
+			Name: builtinSleep,
+			// `sleep` pauses for a number of milliseconds. It is what makes an
+			// animation run at a speed a person can watch, and it is the only
+			// builtin whose cost is measured in wall-clock time rather than in
+			// work done.
+			//
+			// A duration must be a whole number of milliseconds and must not be
+			// negative: there is no such thing as a pause of minus a second,
+			// and reporting that is more useful than quietly treating it as
+			// none. Zero is allowed and returns at once, which is the natural
+			// way to make a pause conditional.
+			Fn: func(args []object.Object) object.Object {
+				if err := expectArgs(builtinSleep, args, 1, token.Position{}); err != nil {
+					return err
+				}
+				ms, ok := args[0].(*object.Integer)
+				if !ok {
+					return object.NewError(token.Position{}, "argument to `sleep` must be an integer, got %s", args[0].Type())
+				}
+				if ms.Value < 0 {
+					return object.NewError(token.Position{}, "argument to `sleep` must not be negative, got %d", ms.Value)
+				}
+				time.Sleep(time.Duration(ms.Value) * time.Millisecond)
+				return object.NullValue()
+			},
+		},
+
 		builtinLen: {
 			Name: builtinLen,
 			Fn: func(args []object.Object) object.Object {
@@ -798,6 +855,40 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 				elements := make([]object.Object, len(arr.Elements), len(arr.Elements)+1)
 				copy(elements, arr.Elements)
 				elements = append(elements, args[1])
+
+				return &object.Array{Elements: elements}
+			},
+		},
+
+		builtinFill: {
+			Name: builtinFill,
+			// `fill` makes an array of n copies of a value. It is here because
+			// `push` copies the whole array on every call, so building an array
+			// a push at a time copies about n*n/2 elements: fine for the
+			// handful of elements most programs want, hopeless for the hundred
+			// thousand a large grid needs. This allocates once.
+			//
+			// The value is repeated, not copied, so an array argument is
+			// aliased into every slot: fill(rows, fill(cols, 0)) is one row
+			// shared rows times over, and writing to one cell of it writes to
+			// all of them. A grid of genuinely separate rows needs a fresh
+			// fill per row, pushed on in a loop.
+			Fn: func(args []object.Object) object.Object {
+				if err := expectArgs(builtinFill, args, 2, token.Position{}); err != nil {
+					return err
+				}
+				n, ok := args[0].(*object.Integer)
+				if !ok {
+					return object.NewError(token.Position{}, "argument to `fill` must be an integer, got %s", args[0].Type())
+				}
+				if n.Value < 0 {
+					return object.NewError(token.Position{}, "argument to `fill` must not be negative, got %d", n.Value)
+				}
+
+				elements := make([]object.Object, n.Value)
+				for i := range elements {
+					elements[i] = args[1]
+				}
 
 				return &object.Array{Elements: elements}
 			},
