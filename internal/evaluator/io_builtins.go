@@ -22,6 +22,7 @@ const (
 	builtinReadAll   = "readAll"
 	builtinReadFile  = "readFile"
 	builtinWriteFile = "writeFile"
+	builtinExists    = "exists"
 	builtinTime      = "time"
 	builtinExit      = "exit"
 )
@@ -151,6 +152,33 @@ func (e *Evaluator) ioBuiltins() map[string]*object.Builtin {
 					return object.NewError(token.Position{}, "cannot write %s: %v", path.Value, err)
 				}
 				return object.NullValue()
+			},
+		},
+
+		builtinExists: {
+			Name: builtinExists,
+			// Whether there is anything at this path.
+			//
+			// `readFile` on a missing file is an error that stops the program,
+			// which is right for a program that was pointed at a file it needs.
+			// But a program whose file is *allowed* to be missing - the store
+			// behind a command-line tool, on its first run - cannot start at
+			// all without asking first, and there is nothing to catch an error
+			// with. This is that question.
+			//
+			// It answers whether something is there, not whether it can be
+			// read: a directory exists, and reading it is still an error.
+			Fn: func(args []object.Object) object.Object {
+				if err := expectArgs(builtinExists, args, 1, token.Position{}); err != nil {
+					return err
+				}
+				path, ok := args[0].(*object.String)
+				if !ok {
+					return object.NewError(token.Position{}, "argument to `exists` must be a string, got %s", args[0].Type())
+				}
+
+				_, err := os.Stat(path.Value)
+				return object.BooleanOf(err == nil)
 			},
 		},
 

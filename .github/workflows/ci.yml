@@ -1,0 +1,52 @@
+name: CI
+
+# The same three things `make check` does, on a machine that has never seen
+# this repository before. A test suite that only ever passes on the computer
+# that wrote it is a test suite that has stopped telling anyone anything.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Format, vet and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: gofmt
+        # -l lists files that are not formatted, and an empty list is what this
+        # wants. Fixing them is `make fmt`.
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: Build
+        run: make build
+
+      - name: Run the examples
+        # A build that succeeds and examples that do not is not a working
+        # interpreter.
+        run: go test . -run 'TestExamples' -v

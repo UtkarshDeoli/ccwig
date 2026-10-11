@@ -512,6 +512,7 @@ polls, as above, which is what `select()` does in C.
 | `readAll()` | Everything left on standard input. |
 | `readFile(path)` | The whole file as a string. Missing files are an error. |
 | `writeFile(path, s)` | Writes `s` to `path`. Returns `null`. |
+| `exists(path)` | Whether there is anything at that path. |
 | `time()` | Milliseconds since the Unix epoch. |
 | `exit(code)` | Stops the program with that status. |
 | `net_listen(port)` | A listening descriptor, or `-1`. Port 0 asks for a free one. |

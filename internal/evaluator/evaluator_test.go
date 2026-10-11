@@ -1779,6 +1779,27 @@ func TestReadAndWriteFile(t *testing.T) {
 	assertError(t, eval(t, `writeFile("`+path+`", 1)`), "must be a string, got INTEGER")
 }
 
+// TestExistsAsksWhetherAFileIsThere is the question a program whose file is
+// allowed to be missing has to ask, because reading one that is not there is
+// an error with nothing to catch it.
+func TestExistsAsksWhetherAFileIsThere(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+
+	assertInspect(t, eval(t, `exists("`+path+`")`), "false")
+
+	evalWith(t, `writeFile("`+path+`", "here");`, New(io.Discard))
+
+	assertInspect(t, eval(t, `exists("`+path+`")`), "true")
+
+	// A directory is something that is there. Whether it can be read is a
+	// different question, and `readFile` still answers that one by failing.
+	assertInspect(t, eval(t, `exists("`+dir+`")`), "true")
+
+	assertError(t, eval(t, `exists(1)`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `exists()`), "wrong number of arguments")
+}
+
 func TestTimeReturnsMilliseconds(t *testing.T) {
 	before := time.Now().UnixMilli()
 	got := eval(t, "time()")

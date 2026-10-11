@@ -64,11 +64,15 @@ run: build  ## Build and start the REPL
 
 report: build  ## Run the network benchmark and write reports/
 	@mkdir -p reports
+	# The machine the numbers came from - its system, its architecture, how
+	# many processors it has - is read by the harness and written into the
+	# report. A note here is only for what the harness cannot see, so this one
+	# says nothing rather than repeating what is already there.
 	go run ./cmd/netbench \
 		-out reports \
 		-ccwig $(BIN_DIR)/$(BINARY) \
 		-commit "$$(git rev-parse --short HEAD)" \
-		-note "$$(go env GOOS)/$$(go env GOARCH), $$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo '?') CPUs"
+		-note "run by hand with make report"
 	@echo "reports/netbench.md, reports/netbench.csv and reports/index.html are up to date"
 
 report-quick: build  ## Same, but short enough to check the harness itself
