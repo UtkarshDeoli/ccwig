@@ -27,6 +27,7 @@ const (
 	builtinNetSetTimeout = "net_settimeout"
 	builtinNetAddr       = "net_addr"
 	builtinNetError      = "net_error"
+	builtinNetTimedOut   = "net_timedout"
 )
 
 func (e *Evaluator) netBuiltins() map[string]*object.Builtin {
@@ -208,6 +209,25 @@ func (e *Evaluator) netBuiltins() map[string]*object.Builtin {
 					return err
 				}
 				return &object.String{Value: e.net().LastError()}
+			},
+		},
+
+		builtinNetTimedOut: {
+			Name: builtinNetTimedOut,
+			// Whether the last failure was a deadline passing, rather than the
+			// socket breaking.
+			//
+			// This is the question a server polling many clients has to ask
+			// after every empty read, and it is a different question from
+			// `net_error`: "nothing has arrived yet, ask again" is not an
+			// error at all. Reading the answer out of the error message would
+			// mean matching on text the operating system chose, which is a
+			// thing a language should not make its programs do.
+			Fn: func(args []object.Object) object.Object {
+				if err := expectArgs(builtinNetTimedOut, args, 0, token.Position{}); err != nil {
+					return err
+				}
+				return object.BooleanOf(e.net().TimedOut())
 			},
 		},
 	}

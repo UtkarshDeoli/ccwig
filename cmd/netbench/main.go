@@ -1,0 +1,402 @@
+// Command netbench measures how fast a CCWIG program can move bytes over a
+// loopback TCP connection, against the same exchange written in Go.
+//
+// It starts an echo server, has each client send a payload and wait for it to
+// come back, a fixed number of times, and writes what it measured to
+// reports/netbench.csv, reports/netbench.md and reports/index.html.
+//
+//	netbench                                   run it and write the reports
+//	netbench -quick                            a short run, for a smoke check
+//	netbench -client -peer H:P -size N -count M
+//	                                           act as the Go client, which is
+//	                                           how the harness runs the
+//	                                           baseline it compares against
+//
+// The baseline runs as a separate process rather than in the harness, because
+// every figure in the report is the wall-clock time of a whole client process:
+// a client measured inside the harness would be missing the start-up cost that
+// every other row includes, and would look faster for a reason that is not
+// about the network.
+//
+// What this measures is not the kernel's TCP. It is a tree-walking interpreter
+// calling two builtins per round trip, and the report says so, because a
+// benchmark that does not say what it measured is a number without a meaning.
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"time"
+)
+
+// config is one message size and how many round trips of it to make.
+type config struct {
+	size  int
+	count int
+}
+
+// fullConfigs are the sizes the real report is built from. The counts are
+// chosen so that each run lasts a few hundred milliseconds: the clock the
+// CCWIG client reads counts milliseconds, and a benchmark whose own timing
+// granularity is a tenth of its total is a benchmark measuring its clock.
+var fullConfigs = []config{
+	{64, 20000},
+	{256, 20000},
+	{1024, 15000},
+	{4096, 10000},
+	{16384, 5000},
+}
+
+// quickConfigs are small enough to run inside a test.
+var quickConfigs = []config{
+	{64, 1000},
+	{1024, 500},
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "netbench:", err)
+		os.Exit(1)
+	}
+}
+
+// options is everything the benchmark does, so that the command line and a
+// test can ask for the same run.
+type options struct {
+	out     string
+	ccwig   string
+	script  string
+	self    string
+	reps    int
+	quick   bool
+	note    string
+	commit  string
+	timeout time.Duration
+}
+
+func run() error {
+	var (
+		out     = flag.String("out", "reports", "directory to write the reports to")
+		ccwig   = flag.String("ccwig", filepath.Join("bin", "ccwig"), "path to the ccwig binary")
+		script  = flag.String("script", filepath.Join("examples", "net", "netbench.cw"), "the client program to measure")
+		self    = flag.String("self", "", "the binary to run as the Go client; empty means this one")
+		reps    = flag.Int("reps", 3, "how many times to run each measurement")
+		quick   = flag.Bool("quick", false, "use short runs, for a smoke check")
+		note    = flag.String("note", "", "a line to record in the report, such as what the machine was")
+		commit  = flag.String("commit", "unknown", "the revision the report was made from")
+		timeout = flag.Duration("timeout", 120*time.Second, "how long one client run may take")
+		client  = flag.Bool("client", false, "act as the Go client instead of running the benchmark")
+		peer    = flag.String("peer", "", "host:port to connect to, with -client")
+		size    = flag.Int("size", 0, "message size in bytes, with -client")
+		count   = flag.Int("count", 0, "round trips to make, with -client")
+	)
+	flag.Parse()
+
+	if *client {
+		return runGoClient(*peer, *size, *count)
+	}
+
+	return benchmark(options{
+		out:     *out,
+		ccwig:   *ccwig,
+		script:  *script,
+		self:    *self,
+		reps:    *reps,
+		quick:   *quick,
+		note:    *note,
+		commit:  *commit,
+		timeout: *timeout,
+	})
+}
+
+func benchmark(opts options) error {
+	if opts.reps < 1 {
+		return errors.New("reps must be at least 1")
+	}
+
+	absolute, err := filepath.Abs(opts.ccwig)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(absolute); err != nil {
+		return fmt.Errorf("%s: %w (build it with `make build`, or pass -ccwig)", opts.ccwig, err)
+	}
+
+	// The client is run from wherever the harness was started, so the path to
+	// it is resolved here and checked: a run of a program that is not there
+	// would otherwise fail inside the client, where it looks like a failure of
+	// the thing being measured rather than of the measurement.
+	script, err := filepath.Abs(opts.script)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(script); err != nil {
+		return fmt.Errorf("%s: %w (run the harness from the repository root, or pass -script)", opts.script, err)
+	}
+
+	configs := fullConfigs
+	if opts.quick {
+		configs = quickConfigs
+	}
+
+	address, stop, err := startEchoServer()
+	if err != nil {
+		return err
+	}
+	defer stop()
+
+	// The reports are about a machine as much as about a program, so the
+	// machine goes in them. A throughput figure with no machine attached is a
+	// number nobody can compare with anything.
+	info := machineInfo{
+		Go:     runtime.Version(),
+		OS:     runtime.GOOS,
+		Arch:   runtime.GOARCH,
+		CPUs:   runtime.NumCPU(),
+		Date:   time.Now().UTC().Format("2006-01-02 15:04 UTC"),
+		Commit: opts.commit,
+		Note:   opts.note,
+		Reps:   opts.reps,
+		Quick:  opts.quick,
+	}
+
+	var rows []row
+
+	// The first run of a program on a machine is slower than the rest: the
+	// binary is read from disk for the first time, the pages it touches are not
+	// in memory yet, and the server has never accepted a connection. Running
+	// each client once and throwing the result away costs a fraction of a second
+	// and keeps that first-run cost out of the report, where it would look like
+	// a fact about the language.
+	for _, impl := range []string{"ccwig", "go"} {
+		warmUp := config{size: 64, count: 200}
+		if _, err := measure(opts.self, impl, absolute, script, address, warmUp, 1, opts.timeout); err != nil {
+			return fmt.Errorf("the warm-up run of %s failed: %w", impl, err)
+		}
+	}
+
+	for _, cfg := range configs {
+		for _, impl := range []string{"ccwig", "go"} {
+			measured, err := measure(opts.self, impl, absolute, script, address, cfg, opts.reps, opts.timeout)
+			if err != nil {
+				return fmt.Errorf("%s at %d bytes: %w", impl, cfg.size, err)
+			}
+			rows = append(rows, measured)
+			fmt.Printf("%-6s %7d bytes %6d round trips  %8.1f ms  %7.1f us/round trip  %8.2f MB/s\n",
+				measured.impl, measured.size, measured.count,
+				measured.wallMS, measured.microsPerRoundTrip(), measured.megabytesPerSecond())
+		}
+	}
+
+	if err := writeReports(opts.out, rows, info); err != nil {
+		return err
+	}
+
+	fmt.Printf("\nwrote %s, %s and %s\n",
+		filepath.Join(opts.out, "netbench.csv"),
+		filepath.Join(opts.out, "netbench.md"),
+		filepath.Join(opts.out, "index.html"))
+
+	return nil
+}
+
+// measure runs one implementation against one configuration, reps times, and
+// keeps the median.
+//
+// The median rather than the mean, because a loopback benchmark on a machine
+// doing anything else has occasional slow runs and no occasional fast ones: the
+// distribution has a long tail on the slow side, and an average would let one
+// interrupted run decide the number.
+func measure(self, impl, ccwigPath, script, address string, cfg config, reps int, timeout time.Duration) (row, error) {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return row{}, err
+	}
+
+	var walls []float64
+	var loops []int64
+	mismatches := 0
+
+	for i := 0; i < reps; i++ {
+		var (
+			loopMS int64
+			bad    int
+			wall   time.Duration
+		)
+
+		if impl == "ccwig" {
+			loopMS, bad, wall, err = runClient(ccwigPath, []string{
+				script, host, portText,
+				strconv.Itoa(cfg.size), strconv.Itoa(cfg.count),
+			}, timeout)
+		} else {
+			loopMS, bad, wall, err = runSelfClient(self, address, cfg, timeout)
+		}
+		if err != nil {
+			return row{}, err
+		}
+
+		walls = append(walls, float64(wall.Microseconds())/1000)
+		loops = append(loops, loopMS)
+		mismatches += bad
+	}
+
+	return row{
+		impl:       impl,
+		size:       cfg.size,
+		count:      cfg.count,
+		reps:       reps,
+		wallMS:     medianFloat(walls),
+		loopMS:     medianInt(loops),
+		mismatches: mismatches,
+	}, nil
+}
+
+// runClient runs a client program and reads the line of numbers it prints.
+//
+// The program is expected to print its own timing as well as make the exchange,
+// so that a wall-clock figure can be checked against what the client itself
+// saw. Two numbers that disagree by a lot mean something outside the loop is
+// taking the time, and the report would rather show that than hide it.
+//
+// The timeout is real: a client that hangs would otherwise hang the whole
+// benchmark, and the point of a deadline is to turn a mistake into an error
+// message rather than into a wait.
+func runClient(path string, args []string, timeout time.Duration) (loopMS int64, mismatches int, wall time.Duration, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, path, args...)
+
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+
+	started := time.Now()
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return 0, 0, 0, fmt.Errorf("%s %v: took longer than %s and was stopped", path, args, timeout)
+		}
+		return 0, 0, 0, fmt.Errorf("%s %v: %w: %s", path, args, err, firstLine(errOut.String()))
+	}
+	wall = time.Since(started)
+
+	loopMS, mismatches, err = parseReport(out.String())
+	return loopMS, mismatches, wall, err
+}
+
+// runSelfClient runs this binary as the Go client, which is the baseline the
+// CCWIG numbers are compared against.
+func runSelfClient(self, address string, cfg config, timeout time.Duration) (int64, int, time.Duration, error) {
+	if self == "" {
+		path, err := os.Executable()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		self = path
+	}
+
+	return runClient(self, []string{
+		"-client", "-peer", address,
+		"-size", strconv.Itoa(cfg.size), "-count", strconv.Itoa(cfg.count),
+		"-timeout", timeout.String(),
+	}, timeout)
+}
+
+// clientLine is what both clients print, so that the harness reads one format
+// whatever it ran.
+var clientLine = regexp.MustCompile(`netbench size=(\d+) count=(\d+) ms=(\d+) mismatches=(\d+)`)
+
+func parseReport(out string) (loopMS int64, mismatches int, err error) {
+	m := clientLine.FindStringSubmatch(out)
+	if m == nil {
+		return 0, 0, fmt.Errorf("the client printed nothing the harness could read: %q", firstLine(out))
+	}
+
+	loopMS, err = strconv.ParseInt(m[3], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	bad, err := strconv.Atoi(m[4])
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return loopMS, bad, nil
+}
+
+// startEchoServer brings up a loopback echo server and returns its address and
+// a function that shuts it down.
+//
+// The server is deliberately not the thing under test: it does the same work
+// for every client, copies bytes back as they arrive, and is the same machine
+// for every row of the report.
+func startEchoServer() (string, func(), error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, err
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+
+			go func() {
+				defer conn.Close()
+				// Everything that arrives goes straight back. io.Copy does the
+				// reading and the writing, so the echo cannot be biased by
+				// anything this program thinks it knows about message sizes.
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+
+	stop := func() {
+		_ = listener.Close()
+		<-done
+	}
+	return listener.Addr().String(), stop, nil
+}
+
+// firstLine is the first line of some output, for an error message that stays
+// on one line.
+func firstLine(s string) string {
+	for i, r := range s {
+		if r == '\n' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+func medianFloat(values []float64) float64 {
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	return sorted[len(sorted)/2]
+}
+
+func medianInt(values []int64) int64 {
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted[len(sorted)/2]
+}

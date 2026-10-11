@@ -157,6 +157,101 @@ func TestNetBuiltinTypeErrors(t *testing.T) {
 	assertError(t, eval(t, `net_send(1, 2)`), "must be a string, got INTEGER")
 	assertError(t, eval(t, `net_recvline("x")`), "must be an integer")
 	assertError(t, eval(t, `net_error(1)`), "wrong number of arguments")
+	assertError(t, eval(t, `net_timedout(1)`), "wrong number of arguments")
+}
+
+// TestTimedOutIsNotTheSameAsGone is the distinction a server polling several
+// clients lives or dies by: an empty read because nothing has arrived yet
+// looks exactly like an empty read because the other end has gone, and the two
+// want opposite answers. Both are null from `net_recvline`; only `net_timedout`
+// tells them apart.
+func TestTimedOutIsNotTheSameAsGone(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("cannot listen: %v", err)
+	}
+	defer listener.Close()
+
+	_, port := hostPort(t, listener.Addr().String())
+
+	// The peer says nothing for longer than the program is willing to wait,
+	// and then answers. So the first read is a deadline passing and the second
+	// succeeds on the same socket - which is the whole point: a timeout is not
+	// a broken connection.
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		time.Sleep(300 * time.Millisecond)
+		bufio.NewReader(conn).ReadString('\n')
+		_, _ = io.WriteString(conn, "yes\n")
+	}()
+
+	src := `
+let fd = net_connect("127.0.0.1", ` + strconv.Itoa(port) + `);
+if fd < 0 { print("connect failed: " + net_error()); exit(1); }
+
+net_settimeout(fd, 50);
+print(net_recvline(fd));
+print(net_timedout());
+print(net_error() != "");
+
+// The socket is still good. A longer wait is all that was needed.
+net_settimeout(fd, 5000);
+net_send(fd, "still here\n");
+print(net_recvline(fd));
+net_close(fd);
+`
+
+	if got := evalOutput(t, src); got != "null\ntrue\ntrue\nyes\n" {
+		t.Errorf("expected a timeout and then an answer on the same socket, got %q", got)
+	}
+}
+
+// TestAnEndOfStreamIsNotATimeout is the other half: when the peer goes away,
+// the same null comes back but the reason is different, and a server that
+// could not tell would keep a departed client forever.
+func TestAnEndOfStreamIsNotATimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("cannot listen: %v", err)
+	}
+	defer listener.Close()
+
+	_, port := hostPort(t, listener.Addr().String())
+
+	src := `
+let fd = net_connect("127.0.0.1", ` + strconv.Itoa(port) + `);
+if fd < 0 { print("connect failed: " + net_error()); exit(1); }
+
+// A long deadline, so that what ends this read cannot be the clock.
+net_settimeout(fd, 5000);
+print(net_recvline(fd));
+print(net_timedout());
+net_close(fd);
+`
+
+	// The peer accepts and hangs up immediately, without a word.
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}()
+
+	if got := evalOutput(t, src); got != "null\nfalse\n" {
+		t.Errorf("expected an end of stream that is not a timeout, got %q", got)
+	}
+
+	<-done
 }
 
 func TestClosingAnUnknownDescriptorIsHarmless(t *testing.T) {

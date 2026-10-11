@@ -431,9 +431,61 @@ as it takes. `net_settimeout(fd, ms)` gives the socket one `ms` milliseconds
 from now, and `net_settimeout(fd, 0)` removes it. This is what keeps a server
 from hanging on a client that went away, and a benchmark from running forever.
 
+A deadline is an instant, not an interval, and it stays where it was put. A
+socket given a 2 millisecond deadline and read two seconds later does not wait
+two more milliseconds; the deadline has passed and the read gives up at once. A
+loop that polls therefore sets the deadline again before every call.
+
+`net_timedout()` is `true` when the last failure was a deadline passing. This is
+the question a server polling several clients has to ask after every empty read,
+and it is a different question from `net_error()`: "nothing has arrived yet" is
+not an error at all, and the socket is still good. Without it, telling a quiet
+client from a departed one means matching on the text of a message that belongs
+to the operating system, which is not a thing a language should make its
+programs do.
+
+```c
+// One thread, many clients: ask each of them, and let them all say no.
+net_settimeout(listener, 2);
+let conn = net_accept(listener);
+
+while running {
+    if conn >= 0 && count < MAX_CLIENTS {
+        fds[count] = conn;
+        count = count + 1;
+    } else if net_timedout() == false {
+        print("cannot accept: " + net_error());
+        running = false;
+    }
+
+    let i = 0;
+    while i < count {
+        net_settimeout(fds[i], 2);
+        let line = net_recvline(fds[i]);
+
+        if line == null && net_timedout() {
+            i = i + 1;              // nothing yet; ask again later
+        } else if line == null {
+            drop(i);                // gone, and not because of the clock.
+                                    // The last client moved into this slot,
+                                    // so i must not advance.
+        } else {
+            sayAll(line);
+            i = i + 1;
+        }
+    }
+
+    net_settimeout(listener, 2);
+    conn = net_accept(listener);
+}
+```
+
+`examples/net/chat-server.cw` is that loop with the details filled in.
+
 Connections block the interpreter the way a one-client-at-a-time C server
 blocks: there are no threads, no callbacks, and nothing hidden. A program that
-serves two clients at once accepts one, serves it, and accepts the next.
+serves two clients at once accepts one, serves it, and accepts the next - or
+polls, as above, which is what `select()` does in C.
 
 ## Built-in functions
 
@@ -472,6 +524,7 @@ serves two clients at once accepts one, serves it, and accepts the next.
 | `net_settimeout(fd, ms)` | A deadline `ms` ahead; 0 removes it. Returns `null`. |
 | `net_addr(fd)` | The address of the socket, as `host:port`. |
 | `net_error()` | The reason the last socket call failed, or `""`. |
+| `net_timedout()` | Whether the last failure was a deadline passing. |
 | `clear()` | Erases the screen and moves the cursor home. Returns `null`. |
 | `sleep(ms)` | Waits `ms` milliseconds. Returns `null`. |
 

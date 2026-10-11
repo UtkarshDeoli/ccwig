@@ -54,6 +54,11 @@ type Registry struct {
 	open    map[int]*socket
 	nextFD  int
 	lastErr string
+	// lastTimeout remembers whether that error was a deadline passing rather
+	// than the socket breaking. The two are different answers to "should I try
+	// again?", and a program should not have to read the operating system's
+	// message to find out which one it got.
+	lastTimeout bool
 }
 
 // NewRegistry returns a Registry with no sockets open.
@@ -65,17 +70,48 @@ func NewRegistry() *Registry {
 // last socket call succeeded.
 func (r *Registry) LastError() string { return r.lastErr }
 
+// TimedOut reports whether the last failure was a deadline passing.
+//
+// A timeout is not a broken socket: the connection is still good and the same
+// call may work a moment later. This is that difference, made visible, so that
+// a server polling many clients can tell "nothing has arrived yet" from "this
+// one is gone" without matching on the text of a message that belongs to the
+// operating system.
+func (r *Registry) TimedOut() bool { return r.lastTimeout }
+
+// clear forgets the last error, which every socket call does on its way in.
+func (r *Registry) clear() {
+	r.lastErr = ""
+	r.lastTimeout = false
+}
+
 // Fail records msg as the last error and returns the -1 a failed descriptor
 // call yields.
 func (r *Registry) Fail(msg string) int {
+	r.clear()
 	r.lastErr = msg
 	return -1
+}
+
+// FailErr records an error from the network stack, keeping whether it was a
+// deadline passing, and returns the -1 a failed descriptor call yields.
+func (r *Registry) FailErr(err error) int {
+	r.lastErr = err.Error()
+	r.lastTimeout = isTimeout(err)
+	return -1
+}
+
+// isTimeout asks the error itself rather than reading its message: the message
+// is the operating system's, and it is not this package's to parse.
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // Listen opens a listening socket on the given port. Port 0 asks the system
 // for a free one, which `Addr` then reports.
 func (r *Registry) Listen(port int) int {
-	r.lastErr = ""
+	r.clear()
 
 	if port < 0 || port > 65535 {
 		return r.Fail("port out of range: " + strconv.Itoa(port))
@@ -92,7 +128,7 @@ func (r *Registry) Listen(port int) int {
 // Accept waits for a connection on a listening socket and returns a
 // descriptor for it, or -1 if it fails or the timeout is reached.
 func (r *Registry) Accept(fd int) int {
-	r.lastErr = ""
+	r.clear()
 
 	s, ok := r.open[fd]
 	if !ok {
@@ -104,7 +140,7 @@ func (r *Registry) Accept(fd int) int {
 
 	conn, err := s.listener.Accept()
 	if err != nil {
-		return r.Fail(err.Error())
+		return r.FailErr(err)
 	}
 
 	return r.add(&socket{conn: conn, reader: bufio.NewReader(conn)})
@@ -112,7 +148,7 @@ func (r *Registry) Accept(fd int) int {
 
 // Connect opens a connection to host:port, or returns -1.
 func (r *Registry) Connect(host string, port int) int {
-	r.lastErr = ""
+	r.clear()
 
 	if port < 0 || port > 65535 {
 		return r.Fail("port out of range: " + strconv.Itoa(port))
@@ -120,7 +156,7 @@ func (r *Registry) Connect(host string, port int) int {
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), dialTimeout)
 	if err != nil {
-		return r.Fail(err.Error())
+		return r.FailErr(err)
 	}
 
 	return r.add(&socket{conn: conn, reader: bufio.NewReader(conn)})
@@ -132,7 +168,7 @@ func (r *Registry) Connect(host string, port int) int {
 // because a partial write that a caller ignores is a bug that shows up as a
 // truncated message much later.
 func (r *Registry) Send(fd int, data string) int {
-	r.lastErr = ""
+	r.clear()
 
 	s, err := r.connection(fd)
 	if err != nil {
@@ -141,7 +177,7 @@ func (r *Registry) Send(fd int, data string) int {
 
 	written, err := io.WriteString(s.conn, data)
 	if err != nil {
-		return r.Fail(err.Error())
+		return r.FailErr(err)
 	}
 	return written
 }
@@ -153,7 +189,7 @@ func (r *Registry) Send(fd int, data string) int {
 // reported as an error: the caller gets no data and LastError names the
 // reason, rather than being handed an end of stream that never happened.
 func (r *Registry) Recv(fd, max int) (string, bool) {
-	r.lastErr = ""
+	r.clear()
 
 	if max < 1 || max > RecvMax {
 		r.Fail("recv size must be between 1 and " + strconv.Itoa(RecvMax))
@@ -174,7 +210,7 @@ func (r *Registry) Recv(fd, max int) (string, bool) {
 		// handing back the bytes now is what makes a final short read before
 		// an end of stream useful rather than lost.
 		if err != nil {
-			r.lastErr = err.Error()
+			r.FailErr(err)
 		}
 		return string(buf[:n]), false
 	}
@@ -183,7 +219,7 @@ func (r *Registry) Recv(fd, max int) (string, bool) {
 		return "", true
 	}
 	if err != nil {
-		r.Fail(err.Error())
+		r.FailErr(err)
 		return "", false
 	}
 
@@ -198,7 +234,7 @@ func (r *Registry) Recv(fd, max int) (string, bool) {
 // The end of the stream is only reported when it comes with no data; a final
 // line that was never terminated by a newline is still returned.
 func (r *Registry) RecvLine(fd int) (string, bool) {
-	r.lastErr = ""
+	r.clear()
 
 	s, err := r.connection(fd)
 	if err != nil {
@@ -208,7 +244,7 @@ func (r *Registry) RecvLine(fd int) (string, bool) {
 
 	line, err := s.reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		r.Fail(err.Error())
+		r.FailErr(err)
 		return "", false
 	}
 	if line == "" && errors.Is(err, io.EOF) {
@@ -220,7 +256,7 @@ func (r *Registry) RecvLine(fd int) (string, bool) {
 
 // Close releases a descriptor. It reports whether the descriptor was open.
 func (r *Registry) Close(fd int) bool {
-	r.lastErr = ""
+	r.clear()
 
 	s, ok := r.open[fd]
 	if !ok {
@@ -241,7 +277,7 @@ func (r *Registry) Close(fd int) bool {
 // SetTimeout gives a socket a deadline ms milliseconds from now. Zero removes
 // the deadline, which is the default.
 func (r *Registry) SetTimeout(fd, ms int) bool {
-	r.lastErr = ""
+	r.clear()
 
 	s, ok := r.open[fd]
 	if !ok {
