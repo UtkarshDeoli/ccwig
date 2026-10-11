@@ -250,7 +250,9 @@ a single reply did not match its request byte for byte.
 
 `.github/workflows/bench.yml` runs the same thing on a GitHub runner and
 publishes the page, so the numbers can be re-measured somewhere other than the
-computer they were taken on.
+computer they were taken on. Once it has run, the page is at
+**<https://utkarshdeoli.github.io/ccwig/>**, and the run carries the three files
+away as a downloadable artifact.
 
 ## Project layout
 
