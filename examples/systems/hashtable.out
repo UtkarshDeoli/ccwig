@@ -1,0 +1,11 @@
+an open-addressing table of 256 slots holding 200 keys
+
+  slots occupied       200
+  load factor          78%
+  keys that collided   100
+  longest probe        30 slots
+  average probe        4.145 slots
+
+  check: ok - every key came back with the value it went in with
+  check: ok - 200 keys that were never inserted were not found
+  check: ok - re-inserting a key replaced it in place

@@ -1,0 +1,1 @@
+{"name":"ccwig","version":2,"tags":["small","fast","zero dependencies"],"limits":{"steps":50000000,"depth":10000},"nested":[[1,2],[3,[4,5]]],"escaped":"a \"quoted\" word","empty":{},"none":null,"ok":true,"ratio":-1.5e-3}

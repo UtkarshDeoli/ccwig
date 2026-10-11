@@ -1,0 +1,14 @@
+sieve of eratosthenes to 500000
+
+  numbers considered     500001
+  primes                 41538
+  struck out             458463
+  largest prime          499979
+  first ten primes       [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+
+  a bitset stores 64 flags in an integer
+  this sieve uses        7813 integers (62504 bytes)
+  one flag per number    500001 values, a byte each
+  a million flags would  125008 bytes
+
+  check: ok - the sieve and trial division agree on the first 500 numbers

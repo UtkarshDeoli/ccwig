@@ -1,0 +1,27 @@
+a heap of 16 cells, each holding a header, a payload cell, or nothing
+
+  a = alloc(4)   returns cell 1
+      four cells and a header
+      used 5 of 16 cells, largest free run 11
+
+  b = alloc(4)   returns cell 6
+      the next four cells and a header
+      used 10 of 16 cells, largest free run 6
+
+  c = alloc(4)   returns cell 11
+      the heap is nearly full
+      used 15 of 16 cells, largest free run 1
+
+  free(b)        b was in the middle, so the hole it leaves is in the middle
+      four cells came back
+      used 10 of 16 cells, largest free run 5
+
+  alloc(5)       needs six cells together, returns -1
+      6 cells are free and the largest run among them is 5
+      so the request fails with memory to spare
+
+  alloc(3)       needs four cells together, returns cell 6
+      the same hole, cut into a smaller piece
+      used 14 of 16 cells, largest free run 1
+
+  check: ok - every block is intact and no two overlap

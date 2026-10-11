@@ -1,0 +1,11 @@
+crc-32 of the published test vectors
+
+  ""                                             00000000
+  "a"                                            e8b7be43
+  "abc"                                          352441c2
+  "123456789"                                    cbf43926
+  "The quick brown fox jumps over the lazy dog"  414fa339
+
+  check: ok - the published values match, cbf43926 and all
+  check: ok - the table and the bit-at-a-time loop agree on all 100 messages
+  check: ok - moving a message by one space is enough to change its sum
