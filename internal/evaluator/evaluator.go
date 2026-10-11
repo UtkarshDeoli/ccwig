@@ -17,6 +17,7 @@ import (
 
 	"github.com/UtkarshDeoli/ccwig/internal/ast"
 	"github.com/UtkarshDeoli/ccwig/internal/object"
+	"github.com/UtkarshDeoli/ccwig/internal/sockets"
 	"github.com/UtkarshDeoli/ccwig/internal/token"
 )
 
@@ -56,6 +57,8 @@ var BuiltinNames = []string{
 	builtinOrd, builtinChr, builtinSubstr, builtinSplit, builtinJoin, builtinFind, builtinUpper, builtinLower,
 	builtinClear, builtinSleep,
 	builtinArgs, builtinReadLine, builtinReadAll, builtinReadFile, builtinWriteFile, builtinTime, builtinExit,
+	builtinNetListen, builtinNetAccept, builtinNetConnect, builtinNetSend, builtinNetRecv,
+	builtinNetRecvLine, builtinNetClose, builtinNetSetTimeout, builtinNetAddr, builtinNetError,
 }
 
 // clearScreen is what `clear` writes: erase the whole screen, then move the
@@ -87,6 +90,8 @@ type Evaluator struct {
 	// evaluator starts reading the new one rather than the old.
 	stdin    *bufio.Reader
 	stdinFor io.Reader
+	// socks holds this evaluator's open sockets, created on first use.
+	socks *sockets.Registry
 }
 
 // New returns an Evaluator writing program output to out.
@@ -1049,6 +1054,7 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 
 	maps.Copy(builtins, e.stringBuiltins())
 	maps.Copy(builtins, e.ioBuiltins())
+	maps.Copy(builtins, e.netBuiltins())
 
 	return builtins
 }

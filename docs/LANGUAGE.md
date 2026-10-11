@@ -367,6 +367,74 @@ Standard input is readable from a file or a pipeline, but not from the REPL:
 the session already owns standard input, and a `readLine` that stole the next
 line the user typed would be worse than one that says it cannot.
 
+## Networking
+
+A program can open real TCP connections. The shape is deliberately C's: a
+socket is an integer descriptor, a call that fails returns `-1` or `null`, and
+`net_error()` holds the reason.
+
+```c
+let listener = net_listen(8080);
+if listener < 0 {
+    print("cannot listen: " + net_error());
+    exit(1);
+}
+
+let conn = net_accept(listener);      // blocks until a client arrives
+if conn < 0 {
+    print("cannot accept: " + net_error());
+    exit(1);
+}
+
+let line = net_recvline(conn);        // a line, without its newline
+while line != null {
+    net_send(conn, upper(line) + "\n");
+    line = net_recvline(conn);
+}
+
+net_close(conn);
+net_close(listener);
+```
+
+A client is the same calls in a different order:
+
+```c
+let fd = net_connect("example.com", 80);
+net_send(fd, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
+let line = net_recvline(fd);
+while line != null {
+    print(line);
+    line = net_recvline(fd);
+}
+net_close(fd);
+```
+
+Descriptors start at 3, because 0, 1 and 2 are standard input, output and
+error, and a C programmer reading this code assumes exactly that. A descriptor
+is never reused within a run, which costs nothing and removes every
+stale-descriptor bug.
+
+The split between an error and a value is deliberate. Passing a string where a
+port belongs is a mistake in the program, so it is an error that stops the
+program, as everywhere else. A refused connection or a closed port is
+something a working program expects, so it comes back as `-1` (or `null`), and
+`if fd < 0` reads the same here as it does in C. A server can therefore refuse
+one connection and carry on serving.
+
+`net_recvline` and `net_recv` return `null` at the end of the stream *and* on
+failure, because there are only so many ways to say nothing; `net_error()`
+tells the two apart for a caller that cares, and most callers only care that
+the data stopped.
+
+A socket starts with no deadline, so a `net_accept` or `net_recv` waits as long
+as it takes. `net_settimeout(fd, ms)` gives the socket one `ms` milliseconds
+from now, and `net_settimeout(fd, 0)` removes it. This is what keeps a server
+from hanging on a client that went away, and a benchmark from running forever.
+
+Connections block the interpreter the way a one-client-at-a-time C server
+blocks: there are no threads, no callbacks, and nothing hidden. A program that
+serves two clients at once accepts one, serves it, and accepts the next.
+
 ## Built-in functions
 
 | Call | Result |
@@ -394,6 +462,16 @@ line the user typed would be worse than one that says it cannot.
 | `writeFile(path, s)` | Writes `s` to `path`. Returns `null`. |
 | `time()` | Milliseconds since the Unix epoch. |
 | `exit(code)` | Stops the program with that status. |
+| `net_listen(port)` | A listening descriptor, or `-1`. Port 0 asks for a free one. |
+| `net_accept(fd)` | A descriptor for the next connection, or `-1`. Blocks. |
+| `net_connect(host, port)` | A connected descriptor, or `-1`. |
+| `net_send(fd, s)` | Sends all of `s`; the number of bytes written, or `-1`. |
+| `net_recv(fd, max)` | Up to `max` bytes as a string, or `null` at the end or on failure. |
+| `net_recvline(fd)` | One line without its newline, or `null` at the end or on failure. |
+| `net_close(fd)` | Releases the descriptor. Returns `null`. |
+| `net_settimeout(fd, ms)` | A deadline `ms` ahead; 0 removes it. Returns `null`. |
+| `net_addr(fd)` | The address of the socket, as `host:port`. |
+| `net_error()` | The reason the last socket call failed, or `""`. |
 | `clear()` | Erases the screen and moves the cursor home. Returns `null`. |
 | `sleep(ms)` | Waits `ms` milliseconds. Returns `null`. |
 
