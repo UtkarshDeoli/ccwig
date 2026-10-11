@@ -40,6 +40,13 @@ var typeNames = map[Type]string{
 	SLASH:    "SLASH",
 	PERCENT:  "PERCENT",
 
+	AMPERSAND: "AMPERSAND",
+	PIPE:      "PIPE",
+	CARET:     "CARET",
+	SHL:       "SHL",
+	SHR:       "SHR",
+	TILDE:     "TILDE",
+
 	LT:  "LT",
 	GT:  "GT",
 	LE:  "LE",
@@ -92,6 +99,14 @@ const (
 	ASTERISK = "*"
 	SLASH    = "/"
 	PERCENT  = "%"
+
+	// Bitwise operators, which apply to INTEGERs only.
+	AMPERSAND = "&"
+	PIPE      = "|"
+	CARET     = "^"
+	SHL       = "<<"
+	SHR       = ">>"
+	TILDE     = "~"
 
 	LT  = "<"
 	GT  = ">"

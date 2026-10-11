@@ -72,17 +72,27 @@ func (l *Lexer) NextToken() token.Token {
 		}
 		return l.makeToken(token.BANG, "!", pos)
 	case '<':
-		if l.peekChar() == '=' {
+		switch l.peekChar() {
+		case '=':
 			ch := l.ch
 			l.readChar()
 			return l.makeToken(token.LE, string(ch)+string(l.ch), pos)
+		case '<':
+			ch := l.ch
+			l.readChar()
+			return l.makeToken(token.SHL, string(ch)+string(l.ch), pos)
 		}
 		return l.makeToken(token.LT, "<", pos)
 	case '>':
-		if l.peekChar() == '=' {
+		switch l.peekChar() {
+		case '=':
 			ch := l.ch
 			l.readChar()
 			return l.makeToken(token.GE, string(ch)+string(l.ch), pos)
+		case '>':
+			ch := l.ch
+			l.readChar()
+			return l.makeToken(token.SHR, string(ch)+string(l.ch), pos)
 		}
 		return l.makeToken(token.GT, ">", pos)
 	case '&':
@@ -91,16 +101,14 @@ func (l *Lexer) NextToken() token.Token {
 			l.readChar()
 			return l.makeToken(token.AND, string(ch)+string(l.ch), pos)
 		}
-		l.addError(pos, "unexpected character '&' (did you mean '&&'?)")
-		return l.makeToken(token.ILLEGAL, "&", pos)
+		return l.makeToken(token.AMPERSAND, "&", pos)
 	case '|':
 		if l.peekChar() == '|' {
 			ch := l.ch
 			l.readChar()
 			return l.makeToken(token.OR, string(ch)+string(l.ch), pos)
 		}
-		l.addError(pos, "unexpected character '|' (did you mean '||'?)")
-		return l.makeToken(token.ILLEGAL, "|", pos)
+		return l.makeToken(token.PIPE, "|", pos)
 	case '+':
 		return l.makeToken(token.PLUS, "+", pos)
 	case '-':
@@ -111,6 +119,10 @@ func (l *Lexer) NextToken() token.Token {
 		return l.makeToken(token.SLASH, "/", pos)
 	case '%':
 		return l.makeToken(token.PERCENT, "%", pos)
+	case '^':
+		return l.makeToken(token.CARET, "^", pos)
+	case '~':
+		return l.makeToken(token.TILDE, "~", pos)
 	case ',':
 		return l.makeToken(token.COMMA, ",", pos)
 	case ';':
@@ -196,6 +208,22 @@ func (l *Lexer) readIdentifier() string {
 
 func (l *Lexer) readNumber(pos token.Position) token.Token {
 	start := l.pos
+
+	// A leading zero may introduce an explicit radix, as it does in C. The
+	// letters are read here rather than being left to the identifier scanner,
+	// which would otherwise turn `0xff` into the number 0 followed by the name
+	// `xff`.
+	if l.ch == '0' {
+		switch l.peekChar() {
+		case 'x', 'X':
+			return l.readRadixNumber(pos, start, isHexDigit, "0x")
+		case 'b', 'B':
+			return l.readRadixNumber(pos, start, isBinaryDigit, "0b")
+		case 'o', 'O':
+			return l.readRadixNumber(pos, start, isOctalDigit, "0o")
+		}
+	}
+
 	for isDigit(l.ch) {
 		l.readChar()
 	}
@@ -210,6 +238,26 @@ func (l *Lexer) readNumber(pos token.Position) token.Token {
 			l.readChar()
 		}
 		return token.Token{Type: token.FLOAT, Literal: string(l.input[start:l.pos]), Pos: pos}
+	}
+
+	return token.Token{Type: token.INT, Literal: string(l.input[start:l.pos]), Pos: pos}
+}
+
+// readRadixNumber reads the digits of an explicitly based integer, such as
+// `0xff` or `0b1010`. The literal keeps its prefix; the parser is what gives it
+// a value.
+func (l *Lexer) readRadixNumber(pos token.Position, start int, valid func(rune) bool, prefix string) token.Token {
+	l.readChar() // consume the leading '0'
+	l.readChar() // consume the radix letter (x, b or o)
+
+	digitsStart := l.pos
+	for valid(l.ch) {
+		l.readChar()
+	}
+
+	if l.pos == digitsStart {
+		l.addError(pos, fmt.Sprintf("malformed number: expected digits after '%s'", prefix))
+		return token.Token{Type: token.ILLEGAL, Literal: prefix, Pos: pos}
 	}
 
 	return token.Token{Type: token.INT, Literal: string(l.input[start:l.pos]), Pos: pos}
@@ -304,4 +352,16 @@ func isLetter(ch rune) bool {
 
 func isDigit(ch rune) bool {
 	return '0' <= ch && ch <= '9'
+}
+
+func isHexDigit(ch rune) bool {
+	return isDigit(ch) || 'a' <= ch && ch <= 'f' || 'A' <= ch && ch <= 'F'
+}
+
+func isBinaryDigit(ch rune) bool {
+	return ch == '0' || ch == '1'
+}
+
+func isOctalDigit(ch rune) bool {
+	return '0' <= ch && ch <= '7'
 }

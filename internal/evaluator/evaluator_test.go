@@ -1536,3 +1536,54 @@ func TestEqualityIsTotalSymmetricAndReflexive(t *testing.T) {
 		}
 	})
 }
+
+// --------------------------------------------------------------- bitwise
+
+func TestBitwiseOperators(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"6 & 3", 2},
+		{"6 | 3", 7},
+		{"6 ^ 3", 5},
+		{"1 << 4", 16},
+		{"256 >> 4", 16},
+		{"~0", -1},
+		{"~5", -6},
+		{"0xff & 0x0f", 15},
+		{"0b1010 | 0b0101", 15},
+		{"0o17", 15},
+		{"~1 & 3", 2},
+
+		// A shift at or beyond the operand width is defined rather than
+		// undefined: zero to the left, the sign to the right.
+		{"1 << 64", 0},
+		{"-1 >> 64", -1},
+		{"-1 >> 1", -1},
+		{"-8 >> 1", -4},
+
+		// Precedence, in C's order.
+		{"1 << 4 | 0x0f", 31},
+		{"1 | 2 & 3", 3},
+		{"1 ^ 3 & 1", 0},
+		{"2 + 3 << 1", 10},
+	}
+
+	for _, tt := range tests {
+		assertInteger(t, eval(t, tt.input), tt.want)
+	}
+}
+
+func TestBitwiseOperatorsRejectNonIntegers(t *testing.T) {
+	assertError(t, eval(t, "1.0 & 2"), "unknown operator")
+	assertError(t, eval(t, "1 & 2.0"), "unknown operator")
+	assertError(t, eval(t, `"a" & "b"`), "unknown operator")
+	assertError(t, eval(t, "~1.5"), "unknown operator: ~FLOAT")
+	assertError(t, eval(t, "~\"a\""), "unknown operator: ~STRING")
+}
+
+func TestShiftByNegativeAmountIsAnError(t *testing.T) {
+	assertError(t, eval(t, "1 << -1"), "shift by a negative amount")
+	assertError(t, eval(t, "1 >> -1"), "shift by a negative amount")
+}

@@ -433,6 +433,16 @@ func (e *Evaluator) evalPrefixExpression(tok token.Token, operator string, right
 		default:
 			return object.NewError(tok.Pos, "unknown operator: -%s", right.Type())
 		}
+	case "~":
+		// Bitwise complement, which C spells the same way and Go spells ^.
+		// It is defined on integers only, so a float is reported rather than
+		// converted.
+		switch operand := right.(type) {
+		case *object.Integer:
+			return &object.Integer{Value: ^operand.Value}
+		default:
+			return object.NewError(tok.Pos, "unknown operator: ~%s", right.Type())
+		}
 	default:
 		return object.NewError(tok.Pos, "unknown operator: %s%s", operator, right.Type())
 	}
@@ -559,6 +569,16 @@ func evalIntegerInfix(tok token.Token, operator string, left, right *object.Inte
 			return object.NewError(tok.Pos, "modulo by zero")
 		}
 		return &object.Integer{Value: left.Value % right.Value}
+	case "&":
+		return &object.Integer{Value: left.Value & right.Value}
+	case "|":
+		return &object.Integer{Value: left.Value | right.Value}
+	case "^":
+		return &object.Integer{Value: left.Value ^ right.Value}
+	case "<<":
+		return shiftInteger(tok, "<<", left.Value, right.Value)
+	case ">>":
+		return shiftInteger(tok, ">>", left.Value, right.Value)
 	case "<":
 		return nativeToBoolean(left.Value < right.Value)
 	case ">":
@@ -570,6 +590,26 @@ func evalIntegerInfix(tok token.Token, operator string, left, right *object.Inte
 	default:
 		return object.NewError(tok.Pos, "unknown operator: INTEGER %s INTEGER", operator)
 	}
+}
+
+// shiftInteger applies `<<` or `>>` to two integers.
+//
+// C leaves a shift by a negative count, or by a count at or beyond the width
+// of the type, undefined. Neither is a panic here: a negative count is
+// reported as an error, and an oversized count follows Go, where shifting an
+// int64 by 64 or more yields zero for `<<` and the sign for `>>`. Defined
+// behaviour beats undefined behaviour even when the definition is arbitrary.
+func shiftInteger(tok token.Token, operator string, value, count int64) object.Object {
+	if count < 0 {
+		return object.NewError(tok.Pos, "shift by a negative amount: %d", count)
+	}
+	// The conversion is safe: count is non-negative, and a count of 64 or more
+	// is defined rather than a panic.
+	shift := uint64(count)
+	if operator == "<<" {
+		return &object.Integer{Value: value << shift}
+	}
+	return &object.Integer{Value: value >> shift}
 }
 
 // evalFloatInfix handles an operation where at least one operand is a FLOAT.

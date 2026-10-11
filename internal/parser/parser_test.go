@@ -132,6 +132,23 @@ func TestOperatorPrecedence(t *testing.T) {
 		{"-a[1]", "(-(a[1]))"},
 		{"add(1, 2) * 3", "(add(1, 2) * 3)"},
 		{"a + b[1 + 1]", "(a + (b[(1 + 1)]))"},
+
+		// Bitwise operators, placed as C places them: the shifts bind tighter
+		// than the comparisons, and `&`, `^`, `|` sit looser than `==` but
+		// tighter than `&&`.
+		{"-a", "(-a)"},
+		{"~a", "(~a)"},
+		{"~a + b", "((~a) + b)"},
+		{"a << b", "(a << b)"},
+		{"a << b + c", "(a << (b + c))"},
+		{"1 + 2 << 3", "((1 + 2) << 3)"},
+		{"a << b < c", "((a << b) < c)"},
+		{"a == b & c", "((a == b) & c)"},
+		{"a & b == c", "(a & (b == c))"},
+		{"a & b | c", "((a & b) | c)"},
+		{"a | b ^ c & d", "(a | (b ^ (c & d)))"},
+		{"a && b | c", "(a && (b | c))"},
+		{"a | b && c", "((a | b) && c)"},
 	}
 
 	for _, tt := range tests {

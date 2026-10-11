@@ -22,13 +22,17 @@ naturally.
 
 | Kind | Examples |
 | --- | --- |
-| Integer | `42`, `0`, `-7` |
+| Integer | `42`, `0`, `-7`, `0xff`, `0b1010`, `0o17` |
 | Float | `3.5`, `0.25` |
 | String | `"hello"`, `""` |
 | Boolean | `true`, `false` |
 | Null | `null` |
 | Identifier | `x`, `total`, `foo_bar1` |
 | Keywords | `let`, `fn`, `if`, `else`, `while`, `for`, `return`, `true`, `false`, `null` |
+
+An integer may be written in hexadecimal with `0x`, in binary with `0b`, or in
+octal with `0o`. A leading zero with no prefix stays decimal, so `010` is ten
+rather than C's octal eight; `0o10` is what asks for octal.
 
 Identifiers start with a letter or `_` and continue with letters, digits or
 `_`. Comments are `// to end of line` and `/* block comments */`, which do
@@ -70,14 +74,18 @@ From tightest to loosest binding:
 | --- | --- | --- |
 | 1 (tightest) | `xs[i]` | left |
 | 2 | `f(x)` | left |
-| 3 | `-x`, `!x` | right |
+| 3 | `-x`, `!x`, `~x` | right |
 | 4 | `*` `/` `%` | left |
 | 5 | `+` `-` | left |
-| 6 | `<` `>` `<=` `>=` | left |
-| 7 | `==` `!=` | left |
-| 8 | `&&` | left |
-| 9 | `\|\|` | left |
-| 10 (loosest) | `=` | right |
+| 6 | `<<` `>>` | left |
+| 7 | `<` `>` `<=` `>=` | left |
+| 8 | `==` `!=` | left |
+| 9 | `&` | left |
+| 10 | `^` | left |
+| 11 | `\|` | left |
+| 12 | `&&` | left |
+| 13 | `\|\|` | left |
+| 14 (loosest) | `=` | right |
 
 Notes:
 
@@ -96,6 +104,14 @@ Notes:
   `xs == xs` is true while `[1, 2] == [1, 2]` is false.
 - `&&` and `||` short-circuit and yield a boolean. A guard such as
   `i < len(xs) && xs[i] != null` is therefore safe.
+- `&` `|` `^` are bitwise and, or and exclusive or, and `~x` is the bitwise
+  complement. They are defined on `INTEGER` only: `1.0 & 2` is an error, as
+  `5.0 % 2` is.
+- `<<` and `>>` shift left and right. A right shift is arithmetic, so it
+  keeps the sign: `-8 >> 1` is `-4`. Shifting by a negative amount is an
+  error, and shifting by 64 or more is defined rather than undefined — zero
+  to the left, the sign to the right — which is the one thing C leaves open
+  that this language settles.
 
 ## Variables and scope
 
@@ -429,12 +445,16 @@ expressionStmt = expression ";" ;
 expression     = assignment ;
 assignment     = IDENT | index "=" assignment | logicOr ;
 logicOr        = logicAnd { "||" logicAnd } ;
-logicAnd       = equality { "&&" equality } ;
+logicAnd       = bitOr { "&&" bitOr } ;
+bitOr          = bitXor { "|" bitXor } ;
+bitXor         = bitAnd { "^" bitAnd } ;
+bitAnd         = equality { "&" equality } ;
 equality       = comparison { ( "==" | "!=" ) comparison } ;
-comparison     = sum { ( "<" | ">" | "<=" | ">=" ) sum } ;
+comparison     = shift { ( "<" | ">" | "<=" | ">=" ) shift } ;
+shift          = sum { ( "<<" | ">>" ) sum } ;
 sum            = product { ( "+" | "-" ) product } ;
 product        = prefix { ( "*" | "/" | "%" ) prefix } ;
-prefix         = ( "-" | "!" ) prefix | call ;
+prefix         = ( "-" | "!" | "~" ) prefix | call ;
 call           = index { "(" [ arguments ] ")" } ;
 index          = primary { "[" expression "]" } ;
 primary        = INT | FLOAT | STRING | "true" | "false" | "null"
