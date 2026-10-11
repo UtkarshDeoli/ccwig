@@ -9,6 +9,7 @@ package evaluator
 import (
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"strings"
 	"time"
@@ -51,6 +52,7 @@ const (
 // BuiltinNames lists the built-in functions in documentation order.
 var BuiltinNames = []string{
 	builtinPrint, builtinLen, builtinPush, builtinFill, builtinFirst, builtinLast, builtinRest, builtinType, builtinStr,
+	builtinOrd, builtinChr, builtinSubstr, builtinSplit, builtinJoin, builtinFind, builtinUpper, builtinLower,
 	builtinClear, builtinSleep,
 }
 
@@ -688,6 +690,12 @@ func (e *Evaluator) evalIndexAssignment(tok token.Token, target *ast.IndexExpres
 
 	arr, ok := left.(*object.Array)
 	if !ok {
+		if _, isString := left.(*object.String); isString {
+			// s[i] reads a character; there is no s[i] = c, because a string
+			// is immutable and every index into it would have to be rewritten
+			// to keep `len` honest.
+			return object.NewError(tok.Pos, "cannot assign to a character in a string; strings are immutable")
+		}
 		return object.NewError(tok.Pos, "index operator not supported: %s", left.Type())
 	}
 
@@ -710,23 +718,33 @@ func (e *Evaluator) evalIndexAssignment(tok token.Token, target *ast.IndexExpres
 }
 
 func (e *Evaluator) evalIndexExpression(tok token.Token, left, index object.Object) object.Object {
-	arr, ok := left.(*object.Array)
-	if !ok {
-		return object.NewError(tok.Pos, "index operator not supported: %s", left.Type())
-	}
-
 	idx, ok := index.(*object.Integer)
 	if !ok {
 		return object.NewError(tok.Pos, "index must be an integer, got %s", index.Type())
 	}
 
-	// Reading outside the array yields null rather than failing, so callers
-	// can test for an absent element with `== null`.
-	if idx.Value < 0 || idx.Value >= int64(len(arr.Elements)) {
-		return object.NullValue()
-	}
+	switch container := left.(type) {
+	case *object.Array:
+		// Reading outside the array yields null rather than failing, so callers
+		// can test for an absent element with `== null`.
+		if idx.Value < 0 || idx.Value >= int64(len(container.Elements)) {
+			return object.NullValue()
+		}
+		return container.Elements[idx.Value]
 
-	return arr.Elements[idx.Value]
+	case *object.String:
+		// A character of a string, as a one-character string. The index counts
+		// characters to match `len`, so `s[i]` for the last i is the last
+		// character even when the text is not ASCII.
+		runes := []rune(container.Value)
+		if idx.Value < 0 || idx.Value >= int64(len(runes)) {
+			return object.NullValue()
+		}
+		return &object.String{Value: string(runes[idx.Value])}
+
+	default:
+		return object.NewError(tok.Pos, "index operator not supported: %s", left.Type())
+	}
 }
 
 // ---------------------------------------------------------------- functions
@@ -799,7 +817,7 @@ func unwrapReturn(result object.Object) object.Object {
 // ------------------------------------------------------------------ builtins
 
 func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
-	return map[string]*object.Builtin{
+	builtins := map[string]*object.Builtin{
 		builtinPrint: {
 			Name: builtinPrint,
 			Fn: func(args []object.Object) object.Object {
@@ -1007,6 +1025,10 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 			},
 		},
 	}
+
+	maps.Copy(builtins, e.stringBuiltins())
+
+	return builtins
 }
 
 // expectArgs checks a builtin's arity.

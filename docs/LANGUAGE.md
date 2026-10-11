@@ -300,6 +300,35 @@ An array of a million elements is a reasonable thing to ask `fill` for. It
 allocates what it is asked for, so asking for far more than the machine has
 will fail as any large allocation fails rather than being caught and reported.
 
+## Strings
+
+A string is a sequence of characters, and it can be indexed and sliced by
+character rather than by byte:
+
+```c
+let s = "hello";
+print(s[0]);            // h
+print(s[4]);            // o
+print(s[5]);            // null — reading past the end is not an error
+print(len(s));          // 5
+print(substr(s, 1, 3)); // ell
+```
+
+Reading outside a string yields `null`, as it does for an array. Writing to a
+character does not exist — a string is immutable, so `s[0] = "H"` is an error
+rather than a silent partial write.
+
+Index and length count characters, so `"héllo"[1]` is `é` and
+`len("héllo")` is `5`. `split` and `find` count the same way, which is what
+lets `substr(s, find(s, "llo"))` mean what it looks like it means.
+
+An empty separator splits a string into its characters, which is the way to
+iterate over one:
+
+```c
+let chars = split("abc", "");   // ["a", "b", "c"]
+```
+
 ## Built-in functions
 
 | Call | Result |
@@ -313,6 +342,13 @@ will fail as any large allocation fails rather than being caught and reported.
 | `rest(xs)` | A new array without the first element, or `null` if empty. |
 | `type(v)` | The name of `v`'s type, as a string. |
 | `str(v)` | `v` rendered as a string. |
+| `ord(s)` | The code point of the first character. An empty string is an error. |
+| `chr(n)` | The one-character string for a code point. |
+| `substr(s, start)` / `substr(s, start, n)` | A slice of `s`, by character. Both forms clamp rather than fail. |
+| `split(s, sep)` | An array of the pieces of `s`; an empty `sep` splits into characters. |
+| `join(xs, sep)` | The elements of `xs` rendered with `str` and joined by `sep`. |
+| `find(s, sub)` | The character index of the first `sub`, or `-1`. |
+| `upper(s)` / `lower(s)` | Case conversion. |
 | `clear()` | Erases the screen and moves the cursor home. Returns `null`. |
 | `sleep(ms)` | Waits `ms` milliseconds. Returns `null`. |
 

@@ -628,7 +628,8 @@ func TestIndexReadsOutOfRangeYieldNull(t *testing.T) {
 func TestIndexErrors(t *testing.T) {
 	assertError(t, eval(t, `[1, 2, 3]["a"]`), "index must be an integer, got STRING")
 	assertError(t, eval(t, "5[0]"), "index operator not supported: INTEGER")
-	assertError(t, eval(t, `"abc"[0]`), "index operator not supported: STRING")
+	assertError(t, eval(t, `"abc"["a"]`), "index must be an integer, got STRING")
+	assertError(t, eval(t, `let s = "abc"; s[0] = "z";`), "strings are immutable")
 	assertError(t, eval(t, "let xs = [1]; xs[5] = 1;"), "index out of range: 5 (array length 1)")
 	assertError(t, eval(t, "let xs = [1]; xs[-1] = 1;"), "index out of range: -1 (array length 1)")
 }
@@ -1586,4 +1587,115 @@ func TestBitwiseOperatorsRejectNonIntegers(t *testing.T) {
 func TestShiftByNegativeAmountIsAnError(t *testing.T) {
 	assertError(t, eval(t, "1 << -1"), "shift by a negative amount")
 	assertError(t, eval(t, "1 >> -1"), "shift by a negative amount")
+}
+
+// ---------------------------------------------------------------- strings
+
+func TestStringIndexing(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"hello"[0]`, "h"},
+		{`"hello"[4]`, "o"},
+		{`"hello"[5]`, "null"}, // out of range reads as null, like an array
+		{`"hello"[-1]`, "null"},
+		{`""[0]`, "null"},
+		{`let s = "hi"; s[0] + s[1]`, "hi"},
+		{`"héllo"[1]`, "é"}, // counted in characters, not bytes
+		{`"héllo"[4]`, "o"},
+		{`len("héllo")`, "5"},
+	}
+
+	for _, tt := range tests {
+		assertInspect(t, eval(t, tt.input), tt.want)
+	}
+}
+
+func TestOrdAndChr(t *testing.T) {
+	assertInteger(t, eval(t, `ord("A")`), 65)
+	assertInteger(t, eval(t, `ord("0")`), 48)
+	assertInteger(t, eval(t, `ord("é")`), 233)
+	assertInspect(t, eval(t, `chr(97)`), "a")
+	assertInspect(t, eval(t, `chr(233)`), "é")
+
+	// The pair round-trips, which is the property that makes them useful.
+	assertInspect(t, eval(t, `chr(ord("Z"))`), "Z")
+
+	assertError(t, eval(t, `ord("")`), "must not be empty")
+	assertError(t, eval(t, `ord(1)`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `chr(-1)`), "not a valid code point")
+	assertError(t, eval(t, `chr(1114112)`), "not a valid code point")
+	assertError(t, eval(t, `chr(55296)`), "surrogate")
+	assertError(t, eval(t, `chr("a")`), "must be an integer, got STRING")
+}
+
+func TestSubstrClamps(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`substr("hello world", 6)`, "world"},
+		{`substr("hello", 0, 3)`, "hel"},
+		{`substr("hello", 1, 3)`, "ell"},
+		{`substr("hello", 2, 99)`, "llo"}, // long enough clamps to the end
+		{`substr("hello", 99)`, ""},       // past the end is empty, not an error
+		{`substr("hello", -5, 2)`, "he"},  // negative start clamps to zero
+		{`substr("hello", 2, -1)`, ""},    // negative length clamps to none
+		{`substr("héllo", 1, 3)`, "éll"},
+		{`substr("", 0)`, ""},
+	}
+
+	for _, tt := range tests {
+		assertInspect(t, eval(t, tt.input), tt.want)
+	}
+
+	assertError(t, eval(t, `substr("a")`), "want 2 or 3, got 1")
+	assertError(t, eval(t, `substr(1, 0)`), "first argument to `substr` must be a string")
+}
+
+func TestSplitAndJoin(t *testing.T) {
+	assertInspect(t, eval(t, `split("a,b,c", ",")`), "[a, b, c]")
+	assertInspect(t, eval(t, `split("a-b-c", "-")`), "[a, b, c]")
+	assertInspect(t, eval(t, `split("abc", "")`), "[a, b, c]")
+	assertInspect(t, eval(t, `split("abc", "x")`), "[abc]")
+	assertInspect(t, eval(t, `split("", ",")`), "[]")
+	assertInspect(t, eval(t, `split("a,b,", ",")`), "[a, b, ]")
+
+	assertInspect(t, eval(t, `join(["a", "b"], "-")`), "a-b")
+	assertInspect(t, eval(t, `join([1, 2, 3], ", ")`), "1, 2, 3")
+	assertInspect(t, eval(t, `join([], "-")`), "")
+
+	// Split and join undo each other.
+	assertInspect(t, eval(t, `join(split("a,b,c", ","), ",")`), "a,b,c")
+
+	assertError(t, eval(t, `split(1, ",")`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `join("a", ",")`), "must be an array, got STRING")
+}
+
+func TestFindCountsCharacters(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{`find("hello", "ll")`, 2},
+		{`find("hello", "h")`, 0},
+		{`find("hello", "z")`, -1},
+		{`find("hello", "")`, 0},
+		{`find("héllo", "llo")`, 2}, // the index is in characters, so it suits substr
+	}
+
+	for _, tt := range tests {
+		assertInteger(t, eval(t, tt.input), tt.want)
+	}
+
+	// The index can be handed straight to substr, which is the point.
+	assertInspect(t, eval(t, `substr("héllo", find("héllo", "llo"))`), "llo")
+}
+
+func TestCaseConversion(t *testing.T) {
+	assertInspect(t, eval(t, `upper("hello")`), "HELLO")
+	assertInspect(t, eval(t, `lower("HELLO")`), "hello")
+	assertInspect(t, eval(t, `upper("MiXeD 123")`), "MIXED 123")
+	assertError(t, eval(t, `upper(1)`), "must be a string, got INTEGER")
 }
