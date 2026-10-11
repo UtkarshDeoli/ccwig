@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/UtkarshDeoli/ccwig/internal/ast"
@@ -9,6 +10,30 @@ import (
 	"github.com/UtkarshDeoli/ccwig/internal/object"
 	"github.com/UtkarshDeoli/ccwig/internal/parser"
 )
+
+// evalForFuzz evaluates program, turning the one panic the evaluator raises on
+// purpose into an ordinary error value.
+//
+// `exit` stops a program by panicking out of the evaluator, which is right
+// when a program is running and wrong when a fuzzer is: a generated `exit()`
+// would otherwise take the test binary down. Fuzz targets evaluate through
+// here so that the panic is caught at the boundary the interpreter would have
+// caught it at.
+func evalForFuzz(ev *Evaluator, program *ast.Program) (result object.Object) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		exit, ok := r.(ExitError)
+		if !ok {
+			panic(r)
+		}
+		result = &object.Error{Message: fmt.Sprintf("exit with status %d", exit.Code)}
+	}()
+
+	return ev.Eval(program, object.NewEnvironment())
+}
 
 // fuzzMaxSteps keeps fuzzed programs cheap. A generated `while true {}` would
 // otherwise burn the full 50 million step budget on every input.
@@ -19,9 +44,11 @@ const fuzzMaxSteps = 200_000
 //
 //   - Eval always returns a value. Returning nil from the top level would
 //     dereference a nil interface in the CLI's result reporting.
-//   - It never panics. The evaluated node types are the parser's output, but
-//     an unhandled combination must surface as an error value rather than
-//     taking the process down.
+//   - It never panics out of the program boundary. The evaluated node types are
+//     the parser's output, but an unhandled combination must surface as an
+//     error value rather than taking the process down. The one deliberate
+//     panic, `exit`, is caught by evalForFuzz, which stands in for the
+//     interpreter that would catch it in a real run.
 //   - Every error names a position, so the CLI can render file:line:col.
 //   - Inspect never panics on a returned value, since the REPL prints it.
 //   - The step limit cannot be exceeded, which is what stops a generated
@@ -81,7 +108,7 @@ func FuzzEval(f *testing.F) {
 		ev := New(&buf)
 		ev.MaxSteps = fuzzMaxSteps
 
-		result := ev.Eval(program, object.NewEnvironment())
+		result := evalForFuzz(ev, program)
 
 		if result == nil {
 			t.Fatalf("Eval returned nil for %q", src)
@@ -133,7 +160,7 @@ func FuzzEvalIsDeterministic(f *testing.F) {
 		run := func() string {
 			ev := New(&bytes.Buffer{})
 			ev.MaxSteps = fuzzMaxSteps
-			return ev.Eval(program, object.NewEnvironment()).Inspect()
+			return evalForFuzz(ev, program).Inspect()
 		}
 
 		first, second := run(), run()
@@ -220,7 +247,7 @@ func runCapturing(program *ast.Program) string {
 	ev := New(&buf)
 	ev.MaxSteps = fuzzMaxSteps
 
-	result := ev.Eval(program, object.NewEnvironment())
+	result := evalForFuzz(ev, program)
 
 	return buf.String() + "=> " + result.Inspect()
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1698,4 +1699,149 @@ func TestCaseConversion(t *testing.T) {
 	assertInspect(t, eval(t, `lower("HELLO")`), "hello")
 	assertInspect(t, eval(t, `upper("MiXeD 123")`), "MIXED 123")
 	assertError(t, eval(t, `upper(1)`), "must be a string, got INTEGER")
+}
+
+// ------------------------------------------------------- input, args, exit
+
+// evalInput evaluates input with the given standard input and program
+// arguments, and returns everything written by `print`.
+func evalInput(t *testing.T, src, stdin string, progArgs []string) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	ev := New(&buf)
+	ev.In = strings.NewReader(stdin)
+	ev.Args = progArgs
+
+	evalWith(t, src, ev)
+
+	return buf.String()
+}
+
+func TestArgsBuiltin(t *testing.T) {
+	assertInspect(t, evalWith(t, "args()", newTestEvaluator(t, "", []string{"a", "b"})), "[a, b]")
+	assertInspect(t, evalWith(t, "args()", newTestEvaluator(t, "", nil)), "[]")
+	assertInteger(t, evalWith(t, "len(args())", newTestEvaluator(t, "", []string{"x", "y", "z"})), 3)
+	assertError(t, eval(t, "args(1)"), "wrong number of arguments to `args`")
+}
+
+// newTestEvaluator builds an evaluator with input and arguments but no output
+// of interest, for the assertions that only need a value back.
+func newTestEvaluator(t *testing.T, stdin string, progArgs []string) *Evaluator {
+	t.Helper()
+
+	ev := New(io.Discard)
+	ev.In = strings.NewReader(stdin)
+	ev.Args = progArgs
+	return ev
+}
+
+func TestReadLineAndReadAll(t *testing.T) {
+	src := "print(readLine()); print(readLine()); print(readLine());"
+	if got := evalInput(t, src, "one\ntwo\n", nil); got != "one\ntwo\nnull\n" {
+		t.Errorf("expected two lines then null, got %q", got)
+	}
+
+	// The last line need not end with a newline.
+	if got := evalInput(t, "print(readLine());", "no-newline", nil); got != "no-newline\n" {
+		t.Errorf("expected a final unterminated line to be read, got %q", got)
+	}
+
+	// A carriage return before the newline is not part of the line.
+	if got := evalInput(t, "print(readLine());", "crlf\r\n", nil); got != "crlf\n" {
+		t.Errorf("expected the carriage return to be dropped, got %q", got)
+	}
+
+	if got := evalInput(t, "print(readAll());", "a\nb\n", nil); got != "a\nb\n\n" {
+		t.Errorf("expected the whole input, got %q", got)
+	}
+
+	// The two share one position on the input.
+	src = "print(readLine()); print(readAll());"
+	if got := evalInput(t, src, "first\nrest\n", nil); got != "first\nrest\n\n" {
+		t.Errorf("expected readAll to continue where readLine stopped, got %q", got)
+	}
+}
+
+func TestReadingWithoutStandardInputIsAnError(t *testing.T) {
+	assertError(t, eval(t, "readLine()"), "no standard input available")
+	assertError(t, eval(t, "readAll()"), "no standard input available")
+}
+
+func TestReadAndWriteFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "note.txt")
+
+	evalWith(t, `writeFile("`+path+`", "hello\nfile");`, New(io.Discard))
+	assertInspect(t, eval(t, `readFile("`+path+`")`), "hello\nfile")
+
+	assertError(t, eval(t, `readFile("`+path+`.missing")`), "cannot read")
+	assertError(t, eval(t, `readFile(1)`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `writeFile("`+path+`", 1)`), "must be a string, got INTEGER")
+}
+
+func TestTimeReturnsMilliseconds(t *testing.T) {
+	before := time.Now().UnixMilli()
+	got := eval(t, "time()")
+
+	after := time.Now().UnixMilli()
+
+	value, ok := got.(*object.Integer)
+	if !ok {
+		t.Fatalf("expected an integer, got %T (%s)", got, got.Inspect())
+	}
+	if value.Value < before || value.Value > after {
+		t.Errorf("expected a time between %d and %d, got %d", before, after, value.Value)
+	}
+}
+
+func TestExitPanicsWithItsCode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"exit()", 0},
+		{"exit(0)", 0},
+		{"exit(7)", 7},
+		{"exit(255)", 255},
+		{"fn f() { exit(3); } f();", 3}, // unwinds through a call
+	}
+
+	for _, tt := range tests {
+		got := recoverExit(t, tt.input)
+		if got == nil {
+			t.Fatalf("input %q: expected an exit panic, got none", tt.input)
+		}
+		if got.Code != tt.want {
+			t.Errorf("input %q: expected code %d, got %d", tt.input, tt.want, got.Code)
+		}
+	}
+}
+
+func TestExitRejectsBadCodes(t *testing.T) {
+	assertError(t, eval(t, "exit(-1)"), "must be between 0 and 255")
+	assertError(t, eval(t, "exit(256)"), "must be between 0 and 255")
+	assertError(t, eval(t, `exit("x")`), "must be an integer, got STRING")
+	assertError(t, eval(t, "exit(1, 2)"), "want at most 1")
+}
+
+// recoverExit evaluates input and returns the ExitError it panicked with, or
+// nil if it did not panic.
+func recoverExit(t *testing.T, input string) *ExitError {
+	t.Helper()
+
+	var caught *ExitError
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				exit, ok := r.(ExitError)
+				if !ok {
+					t.Fatalf("expected an ExitError panic, got %T (%v)", r, r)
+				}
+				caught = &exit
+			}
+		}()
+		eval(t, input)
+	}()
+
+	return caught
 }

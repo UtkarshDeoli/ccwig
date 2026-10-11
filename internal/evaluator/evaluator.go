@@ -7,6 +7,7 @@
 package evaluator
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"maps"
@@ -54,6 +55,7 @@ var BuiltinNames = []string{
 	builtinPrint, builtinLen, builtinPush, builtinFill, builtinFirst, builtinLast, builtinRest, builtinType, builtinStr,
 	builtinOrd, builtinChr, builtinSubstr, builtinSplit, builtinJoin, builtinFind, builtinUpper, builtinLower,
 	builtinClear, builtinSleep,
+	builtinArgs, builtinReadLine, builtinReadAll, builtinReadFile, builtinWriteFile, builtinTime, builtinExit,
 }
 
 // clearScreen is what `clear` writes: erase the whole screen, then move the
@@ -70,10 +72,21 @@ type Evaluator struct {
 	// MaxDepth bounds how deeply user function calls may nest. Zero means
 	// DefaultMaxDepth.
 	MaxDepth int
+	// In is the standard input that `readLine` and `readAll` read. A nil In
+	// means there is no input to read, and asking for some is an error.
+	In io.Reader
+	// Args is what `args()` returns: the arguments the program was given,
+	// without the name of the interpreter or the file it came from.
+	Args []string
 
 	builtins map[string]*object.Builtin
 	steps    int
 	depth    int
+	// stdin is the buffered reader over In, created on first use, and
+	// stdinFor is the In it was created for so that replacing In on a reused
+	// evaluator starts reading the new one rather than the old.
+	stdin    *bufio.Reader
+	stdinFor io.Reader
 }
 
 // New returns an Evaluator writing program output to out.
@@ -82,6 +95,14 @@ func New(out io.Writer) *Evaluator {
 	e.builtins = e.newBuiltins()
 	return e
 }
+
+// ResetCallDepth returns the call-depth counter to zero.
+//
+// It exists for the one case where evaluation stops without unwinding
+// normally: `exit` panics out of the evaluator, skipping the depth decrement
+// that every other return path performs, so an interpreter that survives the
+// exit would otherwise believe it was still several calls deep.
+func (e *Evaluator) ResetCallDepth() { e.depth = 0 }
 
 // Eval evaluates node in env and returns the resulting value.
 func (e *Evaluator) Eval(node ast.Node, env *object.Environment) object.Object {
@@ -1027,6 +1048,7 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 	}
 
 	maps.Copy(builtins, e.stringBuiltins())
+	maps.Copy(builtins, e.ioBuiltins())
 
 	return builtins
 }

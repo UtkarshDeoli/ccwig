@@ -12,6 +12,7 @@ ccwig                       # interactive session
 ccwig -e 'print("hi");'     # run source from the command line
 ccwig -tokens -e '1 + 2;'   # show the token stream
 ccwig -ast -e '1 + 2 * 3;'  # show the parsed syntax tree
+ccwig tool.cw a b c         # a b c reach the program through args()
 ```
 
 A program is a sequence of statements. Statements are separated by
@@ -329,6 +330,43 @@ iterate over one:
 let chars = split("abc", "");   // ["a", "b", "c"]
 ```
 
+## Input, arguments and files
+
+A program can see what it was pointed at. `args()` is the arguments that
+follow the file; `readLine` and `readAll` read standard input.
+
+```sh
+ccwig report.cw sales.csv summary.txt
+```
+
+```c
+let argv = args();          // ["sales.csv", "summary.txt"]
+let row = readLine();       // one line of standard input, or null at the end
+let whole = readAll();      // everything left on standard input
+```
+
+A file can be read and written whole:
+
+```c
+let text = readFile("input.txt");
+writeFile("output.txt", upper(text));
+```
+
+`readFile` on a missing file is an error, not `null`: a program that cannot
+find its input is broken, and saying so where the read happened is more
+useful than a `null` that travels a long way before something trips over it.
+
+`time()` is the number of milliseconds since the Unix epoch, which is the
+clock a program needs to time itself.
+
+`exit(code)` stops the program with that status, which becomes the process
+status; the rest of the program does not run. `exit()` with no argument is
+`exit(0)`. A status outside 0–255 is refused rather than quietly truncated.
+
+Standard input is readable from a file or a pipeline, but not from the REPL:
+the session already owns standard input, and a `readLine` that stole the next
+line the user typed would be worse than one that says it cannot.
+
 ## Built-in functions
 
 | Call | Result |
@@ -349,6 +387,13 @@ let chars = split("abc", "");   // ["a", "b", "c"]
 | `join(xs, sep)` | The elements of `xs` rendered with `str` and joined by `sep`. |
 | `find(s, sub)` | The character index of the first `sub`, or `-1`. |
 | `upper(s)` / `lower(s)` | Case conversion. |
+| `args()` | The program's arguments as an array of strings. |
+| `readLine()` | The next line of standard input without its terminator, or `null` at the end. |
+| `readAll()` | Everything left on standard input. |
+| `readFile(path)` | The whole file as a string. Missing files are an error. |
+| `writeFile(path, s)` | Writes `s` to `path`. Returns `null`. |
+| `time()` | Milliseconds since the Unix epoch. |
+| `exit(code)` | Stops the program with that status. |
 | `clear()` | Erases the screen and moves the cursor home. Returns `null`. |
 | `sleep(ms)` | Waits `ms` milliseconds. Returns `null`. |
 
