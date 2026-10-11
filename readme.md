@@ -105,7 +105,8 @@ byte, so multi-byte text lands where it should.
 
 A program can also talk to the machine it is on. `args()` is the command line,
 `readLine()` and `readAll()` are standard input, `readFile`, `writeFile` and
-`exists` are the filesystem, `exit(code)` is the exit status, and
+`exists` are the filesystem, `time()` and `timeUs()` are the clock in
+milliseconds and in microseconds, `exit(code)` is the exit status, and
 `net_listen`, `net_accept`, `net_connect`, `net_send` and `net_recv` are real
 TCP sockets with real file descriptors — numbered from 3 the way a C program
 numbers them, `-1` on failure, and `net_error()` for the reason. There are no
@@ -224,28 +225,53 @@ between the two columns is the interpreter and not the machine.
 
 | message size | CCWIG µs/round trip | Go µs/round trip | CCWIG MB/s | Go MB/s |
 | ---: | ---: | ---: | ---: | ---: |
-| 64 B | 16.2 | 13.5 | 7.6 | 9.0 |
-| 1,024 B | 18.0 | 14.6 | 108.4 | 133.7 |
-| 4,096 B | 21.3 | 15.1 | 366.1 | 517.7 |
-| 16,384 B | 33.7 | 17.9 | 928.1 | 1,745.1 |
+| 64 B | 16.7 | 14.0 | 7.3 | 8.7 |
+| 256 B | 16.6 | 14.2 | 29.5 | 34.3 |
+| 1,024 B | 18.5 | 15.0 | 105.8 | 130.1 |
+| 4,096 B | 21.5 | 15.2 | 362.6 | 512.9 |
+| 16,384 B | 34.0 | 18.1 | 920.4 | 1,723.5 |
 
-At 16 KiB messages a round trip costs the CCWIG client **1.88× what it costs
+At 16 KiB messages a round trip costs the CCWIG client **1.87× what it costs
 the Go one**. The gap widens with the message because the part that grows is
 the part the interpreter does: building, sending, receiving and comparing a
 string a byte at a time, with two builtin calls per round trip. That is the
 price of no compiler, measured rather than asserted.
 
+But loopback is the one network on which that share is large, and the one
+network on which it does not matter to anybody. So the harness asks the second
+question too: the same two clients against a server that waits before it
+answers, which is what a round trip over a real network costs.
+
+| server delay | CCWIG µs/round trip | Go µs/round trip | difference | CCWIG's share |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 ms | 18.1 | 14.8 | 3.3 | 18.3% |
+| 1 ms | 1,409 | 1,396 | 14 | 1.0% |
+| 10 ms | 11,826 | 11,818 | 8 | 0.1% |
+| 50 ms | 52,093 | 51,914 | 180 | 0.3% |
+
+On loopback the interpreter is a fifth of the wait. At 50 ms of delay it is
+**0.3% of it** — and past the first row the differences are not even
+measurements: forty round trips cannot resolve a few microseconds, because one
+scheduling hiccup costs more than the thing being looked for, so the sweep
+states the largest difference it saw as a ceiling rather than pretending to a
+value. The only row with enough round trips in it to be read as a number is
+the one with no delay, and that is the row the main table is made of: the sweep
+does not measure it again, it reads the 1,024-byte rows out of `netbench.csv`,
+which is why the two files agree about it and why that CSV carries the client's
+own clock in microseconds rather than milliseconds.
+
 Every figure is the median of three runs, after a discarded warm-up, on one
-machine, and the report says which machine:
+machine, and the reports say which machine:
 
-    go 1.24.4 · darwin/arm64 · 10 CPUs · commit f802d75, median of 3 runs
+    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 57d5dc9 · 2026-10-11 23:31 UTC, median of 3 runs · run by hand with make report
 
-Three files come out of one run of `make report`:
-[`netbench.md`](reports/netbench.md) is the readable version,
-[`netbench.csv`](reports/netbench.csv) is the data behind it, and
+One run of `make report` writes five files:
+[`netbench.md`](reports/netbench.md) and [`latency.md`](reports/latency.md) are
+the readable versions, [`netbench.csv`](reports/netbench.csv) and
+[`latency.csv`](reports/latency.csv) are the data behind them, and
 [`reports/index.html`](reports/index.html) is a self-contained page with the
-throughput drawn to scale. Nothing in the report is a number the program
-chose — the client counts the bytes it moved, and the harness fails the run if
+throughput drawn to scale. Nothing in either report is a number a program
+chose: the clients count the bytes they moved, and the harness fails the run if
 a single reply did not match its request byte for byte.
 
 `.github/workflows/bench.yml` runs the same thing on a GitHub runner and

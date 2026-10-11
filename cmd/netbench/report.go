@@ -20,13 +20,23 @@ type row struct {
 	count      int
 	reps       int
 	wallMS     float64
-	loopMS     int64
+	loopUS     int64
 	mismatches int
 }
 
 // microsPerRoundTrip is the latency a round trip was measured at. It is the
 // number a person means by "how fast is this": send, wait, come back.
 func (r row) microsPerRoundTrip() float64 { return r.wallMS * 1000 / float64(r.count) }
+
+// microsPerRoundTripInLoop is the same figure taken from the client's own
+// clock rather than from the harness's. It leaves out the cost of starting the
+// interpreter, which the wall clock charges to every round trip and which has
+// nothing to do with how far away the server is - which is what makes it the
+// right figure for the latency sweep, where the number of round trips in a run
+// is small enough for the start-up cost to be a large part of each one.
+func (r row) microsPerRoundTripInLoop() float64 {
+	return float64(r.loopUS) / float64(r.count)
+}
 
 func (r row) roundTripsPerSecond() float64 { return float64(r.count) / (r.wallMS / 1000) }
 
@@ -66,9 +76,9 @@ func (m machineInfo) describe() string {
 	return strings.Join(parts, " · ")
 }
 
-// writeReports writes all three files. The CSV is the data, the Markdown is
-// what GitHub renders, and the HTML is what a GitHub Pages site serves; all
-// three come from the same rows.
+// writeReports writes the three files of the main report. The CSV is the data,
+// the Markdown is what GitHub renders, and the HTML is what a GitHub Pages
+// site serves; all three come from the same rows.
 func writeReports(dir string, rows []row, info machineInfo) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -109,7 +119,7 @@ func writeCSV(f *os.File, rows []row) error {
 
 	head := []string{
 		"impl", "message_size_bytes", "round_trips", "runs",
-		"wall_ms", "loop_ms", "micros_per_round_trip",
+		"wall_ms", "loop_us", "micros_per_round_trip",
 		"round_trips_per_second", "megabytes_per_second", "mismatches",
 	}
 	if err := w.Write(head); err != nil {
@@ -123,7 +133,7 @@ func writeCSV(f *os.File, rows []row) error {
 			strconv.Itoa(r.count),
 			strconv.Itoa(r.reps),
 			fmt.Sprintf("%.1f", r.wallMS),
-			strconv.FormatInt(r.loopMS, 10),
+			strconv.FormatInt(r.loopUS, 10),
 			fmt.Sprintf("%.2f", r.microsPerRoundTrip()),
 			fmt.Sprintf("%.0f", r.roundTripsPerSecond()),
 			fmt.Sprintf("%.2f", r.megabytesPerSecond()),
@@ -185,10 +195,12 @@ func writeMarkdown(f *os.File, rows []row, info machineInfo) error {
 	b.WriteString("- **µs per round trip** is `wall ms` divided by the number of round trips. It is the\n")
 	b.WriteString("  number a person means by latency.\n")
 	b.WriteString("- **MB/s** counts both directions, because every byte is sent and comes back.\n")
-	b.WriteString("- **loop_ms** in the CSV is what the client itself timed with its own clock, between\n")
+	b.WriteString("- **loop_us** in the CSV is what the client itself timed with its own clock, between\n")
 	b.WriteString("  the first send and the last receive. It is lower than `wall ms` by the cost of\n")
 	b.WriteString("  starting up, and the two agreeing closely is what says nothing outside the loop\n")
-	b.WriteString("  is taking the time.\n")
+	b.WriteString("  is taking the time. It is in microseconds rather than milliseconds because the\n")
+	b.WriteString("  [latency sweep](latency.md) reads its first row off this column, and that row is\n")
+	b.WriteString("  a few microseconds wide.\n")
 	b.WriteString("- Every figure is the **median of the runs**, not the fastest: a loopback benchmark on\n")
 	b.WriteString("  a machine doing anything else has occasional slow runs and no occasional fast ones,\n")
 	b.WriteString("  so the middle of the distribution is the honest number and the best one is not.\n\n")
@@ -302,8 +314,12 @@ func writeHTML(f *os.File, rows []row, info machineInfo) error {
 	b.WriteString("<h2>What is not measured</h2>\n")
 	b.WriteString("<p>Not the kernel's TCP. Loopback is the fastest and least interesting network there is. The numbers are about the interpreter: how much work stands between a program saying <code>net_send</code> and the bytes leaving the process. The Go rows are the control for that &mdash; the same work, same machine, no interpreter.</p>\n")
 
+	b.WriteString("<h2>When the network costs something</h2>\n")
+	b.WriteString("<p>Loopback is the one network on which the interpreter's share of a round trip is large, and the one on which it does not matter to anybody. The <a href=\"latency.md\">latency sweep</a> asks the other question: the same two clients, the same exchange, against a server that waits before it answers, so that a round trip costs what a real one costs.</p>\n")
+
 	b.WriteString("<h2>How to reproduce</h2>\n")
 	b.WriteString("<pre><code>make report</code></pre>\n")
+	b.WriteString("<p>The data behind the table is <a href=\"netbench.csv\">netbench.csv</a>; the sweep's data is <a href=\"latency.csv\">latency.csv</a>.</p>\n")
 
 	fmt.Fprintf(&b, "<footer>%s", html.EscapeString(info.describe()))
 

@@ -5,6 +5,13 @@
 // come back, a fixed number of times, and writes what it measured to
 // reports/netbench.csv, reports/netbench.md and reports/index.html.
 //
+// It then does it again against a server that waits before it answers, which
+// puts the same exchange on a network that costs what a real one costs, and
+// writes that to reports/latency.csv, reports/latency.md. The main report
+// answers how much of a loopback round trip is the interpreter; the sweep
+// answers whether that matters, and the sweep is the one with an interesting
+// answer.
+//
 //	netbench                                   run it and write the reports
 //	netbench -quick                            a short run, for a smoke check
 //	netbench -client -peer H:P -size N -count M
@@ -126,24 +133,9 @@ func benchmark(opts options) error {
 		return errors.New("reps must be at least 1")
 	}
 
-	absolute, err := filepath.Abs(opts.ccwig)
+	absolute, script, err := resolve(opts)
 	if err != nil {
 		return err
-	}
-	if _, err := os.Stat(absolute); err != nil {
-		return fmt.Errorf("%s: %w (build it with `make build`, or pass -ccwig)", opts.ccwig, err)
-	}
-
-	// The client is run from wherever the harness was started, so the path to
-	// it is resolved here and checked: a run of a program that is not there
-	// would otherwise fail inside the client, where it looks like a failure of
-	// the thing being measured rather than of the measurement.
-	script, err := filepath.Abs(opts.script)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(script); err != nil {
-		return fmt.Errorf("%s: %w (run the harness from the repository root, or pass -script)", opts.script, err)
 	}
 
 	configs := fullConfigs
@@ -151,7 +143,7 @@ func benchmark(opts options) error {
 		configs = quickConfigs
 	}
 
-	address, stop, err := startEchoServer()
+	address, stop, err := startEchoServer(0)
 	if err != nil {
 		return err
 	}
@@ -204,12 +196,64 @@ func benchmark(opts options) error {
 		return err
 	}
 
-	fmt.Printf("\nwrote %s, %s and %s\n",
+	// The second question, with a server that waits before it answers.
+	latencyConfigs := fullLatency
+	if opts.quick {
+		latencyConfigs = quickLatency
+	}
+
+	fmt.Println()
+
+	latency, err := latencySweep(opts, absolute, script, latencyConfigs)
+	if err != nil {
+		return err
+	}
+
+	// The zero-delay row is the main report's, re-read rather than re-measured.
+	if zero, ok := zeroDelayRow(rows); ok {
+		fmt.Printf("delay %-5s %6d round trips  ccwig %10.1f us  go %10.1f us  gap %8.1f us  (%.2f%%)\n",
+			"0s", zero.count, zero.ccwigMicros, zero.goMicros, zero.gapMicros(), zero.gapShare())
+		latency = append([]latencyRow{zero}, latency...)
+	}
+
+	if err := writeLatencyReports(opts.out, latency, info); err != nil {
+		return err
+	}
+
+	fmt.Printf("\nwrote %s, %s, %s, %s and %s\n",
 		filepath.Join(opts.out, "netbench.csv"),
 		filepath.Join(opts.out, "netbench.md"),
+		filepath.Join(opts.out, "latency.csv"),
+		filepath.Join(opts.out, "latency.md"),
 		filepath.Join(opts.out, "index.html"))
 
 	return nil
+}
+
+// resolve turns the harness's options into absolute, checked paths.
+//
+// Both paths are resolved here rather than where they are used, because a run
+// of a program that is not there fails inside the client: it looks like a
+// failure of the thing being measured rather than of the measurement, which is
+// the one way this harness could report a wrong number without saying so.
+func resolve(opts options) (ccwigPath, script string, err error) {
+	ccwigPath, err = filepath.Abs(opts.ccwig)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := os.Stat(ccwigPath); err != nil {
+		return "", "", fmt.Errorf("%s: %w (build it with `make build`, or pass -ccwig)", opts.ccwig, err)
+	}
+
+	script, err = filepath.Abs(opts.script)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := os.Stat(script); err != nil {
+		return "", "", fmt.Errorf("%s: %w (run the harness from the repository root, or pass -script)", opts.script, err)
+	}
+
+	return ccwigPath, script, nil
 }
 
 // measure runs one implementation against one configuration, reps times, and
@@ -225,31 +269,30 @@ func measure(self, impl, ccwigPath, script, address string, cfg config, reps int
 		return row{}, err
 	}
 
-	var walls []float64
-	var loops []int64
+	var walls, loopsUS []float64
 	mismatches := 0
 
 	for i := 0; i < reps; i++ {
 		var (
-			loopMS int64
+			loopUS int64
 			bad    int
 			wall   time.Duration
 		)
 
 		if impl == "ccwig" {
-			loopMS, bad, wall, err = runClient(ccwigPath, []string{
+			loopUS, bad, wall, err = runClient(ccwigPath, []string{
 				script, host, portText,
 				strconv.Itoa(cfg.size), strconv.Itoa(cfg.count),
 			}, timeout)
 		} else {
-			loopMS, bad, wall, err = runSelfClient(self, address, cfg, timeout)
+			loopUS, bad, wall, err = runSelfClient(self, address, cfg, timeout)
 		}
 		if err != nil {
 			return row{}, err
 		}
 
 		walls = append(walls, float64(wall.Microseconds())/1000)
-		loops = append(loops, loopMS)
+		loopsUS = append(loopsUS, float64(loopUS))
 		mismatches += bad
 	}
 
@@ -259,7 +302,7 @@ func measure(self, impl, ccwigPath, script, address string, cfg config, reps int
 		count:      cfg.count,
 		reps:       reps,
 		wallMS:     medianFloat(walls),
-		loopMS:     medianInt(loops),
+		loopUS:     int64(medianFloat(loopsUS)),
 		mismatches: mismatches,
 	}, nil
 }
@@ -274,7 +317,7 @@ func measure(self, impl, ccwigPath, script, address string, cfg config, reps int
 // The timeout is real: a client that hangs would otherwise hang the whole
 // benchmark, and the point of a deadline is to turn a mistake into an error
 // message rather than into a wait.
-func runClient(path string, args []string, timeout time.Duration) (loopMS int64, mismatches int, wall time.Duration, err error) {
+func runClient(path string, args []string, timeout time.Duration) (loopUS int64, mismatches int, wall time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -293,8 +336,8 @@ func runClient(path string, args []string, timeout time.Duration) (loopMS int64,
 	}
 	wall = time.Since(started)
 
-	loopMS, mismatches, err = parseReport(out.String())
-	return loopMS, mismatches, wall, err
+	loopUS, mismatches, err = parseReport(out.String())
+	return loopUS, mismatches, wall, err
 }
 
 // runSelfClient runs this binary as the Go client, which is the baseline the
@@ -317,34 +360,42 @@ func runSelfClient(self, address string, cfg config, timeout time.Duration) (int
 
 // clientLine is what both clients print, so that the harness reads one format
 // whatever it ran.
-var clientLine = regexp.MustCompile(`netbench size=(\d+) count=(\d+) ms=(\d+) mismatches=(\d+)`)
+//
+// The client prints its own timing twice, in milliseconds and in microseconds.
+// The harness reads the microseconds, because that is the clock the latency
+// sweep needs; the milliseconds are in the line for whoever runs a client by
+// hand, and the pattern requires them so that a client which stopped printing
+// either clock is a mismatch rather than a quiet zero.
+var clientLine = regexp.MustCompile(`netbench size=(\d+) count=(\d+) ms=(\d+) us=(\d+) mismatches=(\d+)`)
 
-func parseReport(out string) (loopMS int64, mismatches int, err error) {
+func parseReport(out string) (loopUS int64, mismatches int, err error) {
 	m := clientLine.FindStringSubmatch(out)
 	if m == nil {
 		return 0, 0, fmt.Errorf("the client printed nothing the harness could read: %q", firstLine(out))
 	}
 
-	loopMS, err = strconv.ParseInt(m[3], 10, 64)
+	loopUS, err = strconv.ParseInt(m[4], 10, 64)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	bad, err := strconv.Atoi(m[4])
+	bad, err := strconv.Atoi(m[5])
 	if err != nil {
 		return 0, 0, err
 	}
 
-	return loopMS, bad, nil
+	return loopUS, bad, nil
 }
 
 // startEchoServer brings up a loopback echo server and returns its address and
-// a function that shuts it down.
+// a function that shuts it down. A delay above zero makes it wait that long
+// before answering each read, which is how the latency sweep puts a real
+// round trip on a socket that is not a real network.
 //
 // The server is deliberately not the thing under test: it does the same work
 // for every client, copies bytes back as they arrive, and is the same machine
 // for every row of the report.
-func startEchoServer() (string, func(), error) {
+func startEchoServer(delay time.Duration) (string, func(), error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
@@ -363,10 +414,20 @@ func startEchoServer() (string, func(), error) {
 
 			go func() {
 				defer conn.Close()
+
 				// Everything that arrives goes straight back. io.Copy does the
 				// reading and the writing, so the echo cannot be biased by
 				// anything this program thinks it knows about message sizes.
-				_, _ = io.Copy(conn, conn)
+				//
+				// With a delay there is something to bias, and io.Copy cannot
+				// express it, so the echo is written out by hand instead: read
+				// a chunk, wait, write it back.
+				if delay <= 0 {
+					_, _ = io.Copy(conn, conn)
+					return
+				}
+
+				echoSlowly(conn, delay)
 			}()
 		}
 	}()
@@ -376,6 +437,33 @@ func startEchoServer() (string, func(), error) {
 		<-done
 	}
 	return listener.Addr().String(), stop, nil
+}
+
+// echoSlowly copies bytes back, waiting delay before each reply.
+//
+// The wait is on the reply and not on the read, so what a client measures is
+// the delay plus the loopback underneath it - which is the number the sweep is
+// about. A real link would charge a sender's delay too, but that delay is not
+// the interpreter's either, and adding it would only make every number in the
+// table larger by the same amount.
+func echoSlowly(conn net.Conn, delay time.Duration) {
+	buffer := make([]byte, 64<<10)
+
+	for {
+		read, err := conn.Read(buffer)
+
+		if read > 0 {
+			time.Sleep(delay)
+
+			if _, err := conn.Write(buffer[:read]); err != nil {
+				return
+			}
+		}
+
+		if err != nil {
+			return
+		}
+	}
 }
 
 // firstLine is the first line of some output, for an error message that stays
@@ -392,11 +480,5 @@ func firstLine(s string) string {
 func medianFloat(values []float64) float64 {
 	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
-	return sorted[len(sorted)/2]
-}
-
-func medianInt(values []int64) int64 {
-	sorted := append([]int64(nil), values...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	return sorted[len(sorted)/2]
 }

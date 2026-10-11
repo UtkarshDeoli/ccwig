@@ -6,17 +6,23 @@
 // the same number of bytes to come back, `count` times, and prints one line of
 // numbers that the harness reads:
 //
-//     netbench size=1024 count=5000 ms=812 mismatches=0
+//     netbench size=1024 count=5000 ms=812 us=812344 mismatches=0
 //
-// The harness measures the wall-clock time of the whole process; the `ms` here
+// The harness measures the wall-clock time of the whole process; the `us` here
 // is what the program itself saw between the first send and the last receive.
 // The two numbers differ by the interpreter starting up and reading the
 // source, which is a real cost and is left in rather than hidden: a benchmark
 // that quietly discards the parts it does not like is not a benchmark.
 //
-// `time()` counts milliseconds, so a run has to last long enough for a
-// millisecond to be a small part of it. The counts the harness uses are chosen
-// for that, not because the numbers are round.
+// Both clocks are printed because the two reports ask different things. The
+// main report wants the whole process, so that a client is charged for being
+// started. The latency sweep wants the loop alone: starting the interpreter
+// costs the same whether a round trip takes twenty microseconds or fifty
+// milliseconds, and dividing that constant by ten round trips would put the
+// cost of starting up into a column about the network.
+//
+// `time()` counts milliseconds, which is not a small part of one round trip,
+// so the loop is timed with `timeUs()`.
 
 fn toInt(s) {
 	let value = 0;
@@ -79,7 +85,7 @@ if fd < 0 {
 // deadline here is only to keep a mistake from waiting forever.
 net_settimeout(fd, 30000);
 
-let started = time();
+let started = timeUs();
 let mismatches = 0;
 
 for let i = 0; i < count; i = i + 1 {
@@ -110,10 +116,11 @@ for let i = 0; i < count; i = i + 1 {
 	}
 }
 
-let elapsed = time() - started;
+let elapsed = timeUs() - started;
 
 net_close(fd);
 
 print("netbench size=" + str(size) + " count=" + str(count)
-	+ " ms=" + str(elapsed)
+	+ " ms=" + str(elapsed / 1000)
+	+ " us=" + str(elapsed)
 	+ " mismatches=" + str(mismatches));

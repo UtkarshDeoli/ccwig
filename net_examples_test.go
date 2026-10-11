@@ -491,7 +491,7 @@ func TestNetbenchMovesWhatItSaysItMoved(t *testing.T) {
 		t.Fatalf("netbench exited %d:\n%s", status, out)
 	}
 
-	m := regexp.MustCompile(`netbench size=(\d+) count=(\d+) ms=(\d+) mismatches=(\d+)`).FindStringSubmatch(out)
+	m := regexp.MustCompile(`netbench size=(\d+) count=(\d+) ms=(\d+) us=(\d+) mismatches=(\d+)`).FindStringSubmatch(out)
 	if m == nil {
 		t.Fatalf("netbench printed no line the harness could read:\n%s", out)
 	}
@@ -502,8 +502,32 @@ func TestNetbenchMovesWhatItSaysItMoved(t *testing.T) {
 	if got := m[2]; got != strconv.Itoa(count) {
 		t.Errorf("the client reported count %s, it was told %d", got, count)
 	}
-	if got := m[4]; got != "0" {
+	if got := m[5]; got != "0" {
 		t.Errorf("the client reported %s mismatches: it is not moving the bytes it thinks it is", got)
+	}
+
+	// The two clocks are the same span reported twice, so a client that had one
+	// of them wrong - or that timed the loop with the coarser one and reported
+	// it as the finer - would show up here rather than in a report.
+	ms, err := strconv.Atoi(m[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	us, err := strconv.Atoi(m[4])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if us < ms*1000 || us >= (ms+2)*1000 {
+		t.Errorf("the client reported %d ms and %d us, which are not the same span", ms, us)
+	}
+
+	// A round trip is a send and a receive on loopback, so a burst of them
+	// cannot have taken no time at all. This is the check that would catch a
+	// client timing an empty loop.
+	if us <= 0 {
+		t.Errorf("%d round trips were reported as taking %d us", count, us)
 	}
 }
 

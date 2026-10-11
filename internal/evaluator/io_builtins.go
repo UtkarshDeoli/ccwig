@@ -24,6 +24,7 @@ const (
 	builtinWriteFile = "writeFile"
 	builtinExists    = "exists"
 	builtinTime      = "time"
+	builtinTimeUs    = "timeUs"
 	builtinExit      = "exit"
 )
 
@@ -192,6 +193,26 @@ func (e *Evaluator) ioBuiltins() map[string]*object.Builtin {
 					return err
 				}
 				return &object.Integer{Value: time.Now().UnixMilli()}
+			},
+		},
+
+		builtinTimeUs: {
+			Name: builtinTimeUs,
+			// Microseconds since the Unix epoch: the same clock as `time`, in
+			// the unit a round trip is measured in.
+			//
+			// `time()` counts milliseconds, and a millisecond is not a small
+			// part of the things a networking program wants to time - a
+			// loopback round trip, one send and one receive, a builtin call.
+			// Timing a hundred of those with a clock that ticks once per
+			// thousand microseconds leaves the answer to the clock rather than
+			// to the program, so this exists for the same reason a C program
+			// reaches for clock_gettime instead of time().
+			Fn: func(args []object.Object) object.Object {
+				if err := expectArgs(builtinTimeUs, args, 0, token.Position{}); err != nil {
+					return err
+				}
+				return &object.Integer{Value: time.Now().UnixMicro()}
 			},
 		},
 

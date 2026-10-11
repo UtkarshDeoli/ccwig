@@ -117,7 +117,7 @@ func TestBenchmarkWritesReportsOfAnHonestRun(t *testing.T) {
 		t.Fatalf("benchmark: %v", err)
 	}
 
-	for _, name := range []string{"netbench.csv", "netbench.md", "index.html"} {
+	for _, name := range []string{"netbench.csv", "netbench.md", "latency.csv", "latency.md", "index.html"} {
 		path := filepath.Join(out, name)
 
 		info, err := os.Stat(path)
@@ -181,10 +181,153 @@ func TestBenchmarkWritesReportsOfAnHonestRun(t *testing.T) {
 
 	page := readFile(t, filepath.Join(out, "index.html"))
 
-	for _, want := range []string{"<!doctype html>", "CCWIG network benchmark", "</html>"} {
+	for _, want := range []string{"<!doctype html>", "CCWIG network benchmark", "</html>", "latency.md"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the HTML report does not contain %q", want)
 		}
+	}
+
+	checkSweepRows(t, out)
+}
+
+// checkSweepRows reads the latency sweep back and checks the claim the sweep
+// exists to make: that the difference between the two clients is the
+// interpreter, and that the interpreter does not get slower because the
+// network did.
+//
+// The bound is deliberately loose - a tenth of the delay - because the thing
+// being ruled out is the difference growing *with* the delay, which would be a
+// factor of thousands, and a tight bound on a shared machine would fail for
+// reasons that are about the machine.
+func checkSweepRows(t *testing.T, out string) {
+	t.Helper()
+
+	sweep := readLatencyCSV(t, filepath.Join(out, "latency.csv"))
+
+	// One row per delay in the sweep, plus the zero-delay row carried over from
+	// the main report.
+	if len(sweep) != len(quickLatency)+1 {
+		t.Fatalf("the sweep has %d rows, want the delays plus the zero-delay row (%d)",
+			len(sweep), len(quickLatency)+1)
+	}
+
+	if sweep[0].delayMS != 0 {
+		t.Errorf("the first row of the sweep is at %d ms of delay, want the zero-delay row", sweep[0].delayMS)
+	}
+
+	// The zero-delay row is the main report's row for the sweep's message size,
+	// so it has to be the same measurement rather than a second one.
+	mainRows := readCSV(t, filepath.Join(out, "netbench.csv"))
+
+	zero, ok := zeroDelayRow(mainRows)
+	if !ok {
+		t.Fatal("the main report has no rows at the sweep's message size, which is what the sweep's first row is built from")
+	}
+	if zero.count != sweep[0].count {
+		t.Errorf("the zero-delay row made %d round trips but the main report made %d",
+			sweep[0].count, zero.count)
+	}
+
+	// The zero-delay row is the one row of the sweep computed from another
+	// report's rows, so the two published files have to agree about it. A CSV
+	// column coarse enough to lose those microseconds would publish a first row
+	// that nothing in the repository could reproduce - which is how this check
+	// came to exist.
+	if diff := zero.ccwigMicros - sweep[0].ccwigMicros; diff > 0.01 || diff < -0.01 {
+		t.Errorf("the main report gives the CCWIG client %.2f µs per round trip at %d bytes but the sweep's first row says %.2f µs",
+			zero.ccwigMicros, latencySize, sweep[0].ccwigMicros)
+	}
+	if diff := zero.goMicros - sweep[0].goMicros; diff > 0.01 || diff < -0.01 {
+		t.Errorf("the main report gives the Go client %.2f µs per round trip at %d bytes but the sweep's first row says %.2f µs",
+			zero.goMicros, latencySize, sweep[0].goMicros)
+	}
+	for _, r := range sweep[1:] {
+		if zero.count <= r.count {
+			t.Errorf("the zero-delay row made %d round trips, which is no more than the %d of the row at %d ms of delay",
+				zero.count, r.count, r.delayMS)
+		}
+	}
+
+	for _, r := range sweep {
+		if r.mismatches != 0 {
+			t.Errorf("at %d ms of delay: %d replies did not match their request", r.delayMS, r.mismatches)
+		}
+		if r.count <= 0 || r.ccwigMicros <= 0 || r.goMicros <= 0 {
+			t.Errorf("at %d ms of delay: the row is not a measurement (%+v)", r.delayMS, r)
+			continue
+		}
+		if r.size != latencySize {
+			t.Errorf("at %d ms of delay: the message was %d bytes, want %d", r.delayMS, r.size, latencySize)
+		}
+
+		// The round trip has to include the delay, or the delay was never
+		// applied and everything below is about a server that ignores it.
+		if r.delayMS > 0 {
+			want := float64(r.delayMS) * 1000
+
+			if r.ccwigMicros < want*0.9 {
+				t.Errorf("at %d ms of delay the CCWIG round trip was %.1f µs, which is not the delay", r.delayMS, r.ccwigMicros)
+			}
+			if gap := r.gapMicros(); gap > want*0.1 {
+				t.Errorf("at %d ms of delay the interpreter accounts for %.1f µs of the round trip: it is paying for the wait", r.delayMS, gap)
+			}
+		}
+	}
+
+	// The table has to be about something: a sweep where every delay measured
+	// the same round trip is a sweep whose delay did nothing.
+	if len(sweep) > 1 {
+		first, last := sweep[0], sweep[len(sweep)-1]
+
+		if last.ccwigMicros <= first.ccwigMicros {
+			t.Errorf("the round trip at %d ms of delay (%.1f µs) is not longer than at %d ms (%.1f µs)",
+				last.delayMS, last.ccwigMicros, first.delayMS, first.ccwigMicros)
+		}
+	}
+}
+
+// TestEchoServerWaitsBeforeItAnswers is the sweep's one dependency: if the
+// server ignores the delay, every row of the sweep is the same row and the
+// report says nothing while looking like it says something.
+func TestEchoServerWaitsBeforeItAnswers(t *testing.T) {
+	const delay = 60 * time.Millisecond
+
+	address, stop, err := startEchoServer(delay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	conn, err := dial(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// The delay is per reply, so three round trips of it are three delays.
+	const trips = 3
+
+	started := time.Now()
+
+	for i := 0; i < trips; i++ {
+		if err := writeAll(conn, "ping"); err != nil {
+			t.Fatal(err)
+		}
+
+		reply, err := readAll(conn, len("ping"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reply != "ping" {
+			t.Fatalf("round trip %d got %q back, want %q", i, reply, "ping")
+		}
+	}
+
+	elapsed := time.Since(started)
+
+	if elapsed < trips*delay {
+		t.Errorf("%d round trips took %s, which is less than the %s the server was told to wait",
+			trips, elapsed, trips*delay)
 	}
 }
 
@@ -210,7 +353,7 @@ func TestRefusesARunWithoutAnInterpreter(t *testing.T) {
 // TestEchoServerEchoes is the one thing every figure in the report rests on:
 // that the server sends back exactly what it was given.
 func TestEchoServerEchoes(t *testing.T) {
-	address, stop, err := startEchoServer()
+	address, stop, err := startEchoServer(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,8 +412,47 @@ func readCSV(t *testing.T, path string) []row {
 			count:      atoi(t, record[2]),
 			reps:       atoi(t, record[3]),
 			wallMS:     atof(t, record[4]),
-			loopMS:     int64(atoi(t, record[5])),
+			loopUS:     int64(atoi(t, record[5])),
 			mismatches: atoi(t, record[9]),
+		})
+	}
+
+	return rows
+}
+
+func readLatencyCSV(t *testing.T, path string) []latencyRow {
+	t.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	records, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(records) == 0 {
+		t.Fatal("the latency CSV has no header")
+	}
+
+	var rows []latencyRow
+
+	for line, record := range records[1:] {
+		if len(record) != 9 {
+			t.Fatalf("line %d has %d fields, want 9", line+2, len(record))
+		}
+
+		rows = append(rows, latencyRow{
+			delayMS:     atoi(t, record[0]),
+			size:        atoi(t, record[1]),
+			count:       atoi(t, record[2]),
+			reps:        atoi(t, record[3]),
+			ccwigMicros: atof(t, record[4]),
+			goMicros:    atof(t, record[5]),
+			mismatches:  atoi(t, record[8]),
 		})
 	}
 

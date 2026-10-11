@@ -60,11 +60,15 @@ func runGoClient(peer string, size, count int) error {
 		}
 	}
 
-	elapsed := time.Since(started).Milliseconds()
+	elapsed := time.Since(started)
 
 	// The same line the CCWIG client prints, so the harness reads one format
-	// from either one.
-	fmt.Printf("netbench size=%d count=%d ms=%d mismatches=%d\n", size, count, elapsed, mismatches)
+	// from either one. The loop is timed from just before the first write to
+	// just after the last read, which is the same span the CCWIG client times,
+	// and both are given in milliseconds and in microseconds so that the two
+	// reports can each read the one they need.
+	fmt.Printf("netbench size=%d count=%d ms=%d us=%d mismatches=%d\n",
+		size, count, elapsed.Milliseconds(), elapsed.Microseconds(), mismatches)
 
 	return nil
 }

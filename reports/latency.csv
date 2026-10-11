@@ -1,0 +1,5 @@
+server_delay_ms,message_size_bytes,round_trips,runs,ccwig_micros_per_round_trip,go_micros_per_round_trip,difference_micros,difference_percent_of_round_trip,mismatches
+0,1024,15000,3,18.12,14.81,3.31,18.274,0
+1,1024,600,3,1409.46,1395.77,13.69,0.971,0
+10,1024,100,3,11826.48,11818.43,8.05,0.068,0
+50,1024,40,3,52093.32,51913.80,179.52,0.345,0

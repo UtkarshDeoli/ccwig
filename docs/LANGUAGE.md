@@ -357,7 +357,16 @@ find its input is broken, and saying so where the read happened is more
 useful than a `null` that travels a long way before something trips over it.
 
 `time()` is the number of milliseconds since the Unix epoch, which is the
-clock a program needs to time itself.
+clock a program needs to time itself. `timeUs()` is the same clock in
+microseconds, for the things a millisecond is too coarse for — one socket
+send, one round trip, one builtin call. A program that times a hundred round
+trips with `time()` is measuring its clock as much as its loop:
+
+```c
+let started = timeUs();
+// ... the work ...
+print("took " + str(timeUs() - started) + " microseconds");
+```
 
 `exit(code)` stops the program with that status, which becomes the process
 status; the rest of the program does not run. `exit()` with no argument is
@@ -514,6 +523,7 @@ polls, as above, which is what `select()` does in C.
 | `writeFile(path, s)` | Writes `s` to `path`. Returns `null`. |
 | `exists(path)` | Whether there is anything at that path. |
 | `time()` | Milliseconds since the Unix epoch. |
+| `timeUs()` | The same clock in microseconds, for timing something shorter than a millisecond. |
 | `exit(code)` | Stops the program with that status. |
 | `net_listen(port)` | A listening descriptor, or `-1`. Port 0 asks for a free one. |
 | `net_accept(fd)` | A descriptor for the next connection, or `-1`. Blocks. |

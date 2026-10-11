@@ -1815,6 +1815,39 @@ func TestTimeReturnsMilliseconds(t *testing.T) {
 	}
 }
 
+// TestTimeUsIsTheSameClockInMicroseconds checks the two clocks agree about
+// what time it is, because a second clock that drifted from the first would be
+// a second clock a program could not use beside it.
+func TestTimeUsIsTheSameClockInMicroseconds(t *testing.T) {
+	before := time.Now().UnixMicro()
+
+	gotValue := eval(t, "timeUs()")
+	gotMS := eval(t, "time()")
+
+	after := time.Now().UnixMicro()
+
+	got, ok := gotValue.(*object.Integer)
+	if !ok {
+		t.Fatalf("expected an integer, got %T (%s)", gotValue, gotValue.Inspect())
+	}
+	if got.Value < before || got.Value > after {
+		t.Errorf("expected a time between %d and %d, got %d", before, after, got.Value)
+	}
+
+	ms, ok := gotMS.(*object.Integer)
+	if !ok {
+		t.Fatalf("expected an integer, got %T (%s)", gotMS, gotMS.Inspect())
+	}
+
+	// The two reads are a microsecond or two apart at most, so a millisecond
+	// of disagreement would mean one of them was not the clock.
+	if diff := got.Value/1000 - ms.Value; diff < -1 || diff > 1 {
+		t.Errorf("timeUs()/1000 is %d and time() is %d, which is not the same clock", got.Value/1000, ms.Value)
+	}
+
+	assertError(t, eval(t, "timeUs(1)"), "wrong number of arguments")
+}
+
 func TestExitPanicsWithItsCode(t *testing.T) {
 	tests := []struct {
 		input string
