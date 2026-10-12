@@ -289,9 +289,11 @@ cannot go on saying what an earlier run measured.
 
 `.github/workflows/bench.yml` runs the same thing on a GitHub runner and
 publishes the page, so the numbers can be re-measured somewhere other than the
-computer they were taken on. Once it has run, the page is at
-**<https://utkarshdeoli.github.io/ccwig/>**, and the run carries the reports
-away as a downloadable artifact.
+computer they were taken on. It runs on every push to `main`, and the page is at
+**<https://utkarshdeoli.github.io/ccwig/>** — the reports in this repository are
+from the hand run the machine line above names, and the page is what a runner
+measured afterwards. The run also carries the reports away as a downloadable
+artifact.
 
 Sockets, the benchmark and the to-do tool were designed before any of them were
 written. [`docs/design/networking-and-apps.md`](docs/design/networking-and-apps.md)
