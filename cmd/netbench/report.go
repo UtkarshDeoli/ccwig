@@ -14,6 +14,11 @@ import (
 // row is one line of the report: one client implementation, run at one message
 // size. Everything in the writers below is derived from these five numbers
 // plus the count, so there is one place where a figure is defined.
+//
+// published is the µs per round trip as it was written to the CSV, and is set
+// only when a test reads a report back. It is here so that a test can check the
+// figure in the file against the figure in the file, rather than against a
+// second computation that is nearly the same one.
 type row struct {
 	impl       string
 	size       int
@@ -21,6 +26,7 @@ type row struct {
 	reps       int
 	wallMS     float64
 	loopUS     int64
+	published  float64
 	mismatches int
 }
 
@@ -76,9 +82,9 @@ func (m machineInfo) describe() string {
 	return strings.Join(parts, " · ")
 }
 
-// writeReports writes the three files of the main report. The CSV is the data,
-// the Markdown is what GitHub renders, and the HTML is what a GitHub Pages
-// site serves; all three come from the same rows.
+// writeReports writes the data and the prose of the main report. The CSV is the
+// data and the Markdown is what GitHub renders; both come from the same rows,
+// and writePage builds the page out of both reports together.
 func writeReports(dir string, rows []row, info machineInfo) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -90,7 +96,6 @@ func writeReports(dir string, rows []row, info machineInfo) error {
 	}{
 		{"netbench.csv", func(f *os.File) error { return writeCSV(f, rows) }},
 		{"netbench.md", func(f *os.File) error { return writeMarkdown(f, rows, info) }},
-		{"index.html", func(f *os.File) error { return writeHTML(f, rows, info) }},
 	}
 
 	for _, w := range writers {
@@ -132,7 +137,13 @@ func writeCSV(f *os.File, rows []row) error {
 			strconv.Itoa(r.size),
 			strconv.Itoa(r.count),
 			strconv.Itoa(r.reps),
-			fmt.Sprintf("%.1f", r.wallMS),
+			// The wall clock is measured in whole microseconds, so three
+			// decimals is not precision being claimed - it is the resolution
+			// the clock has. It matters because two columns to the right are
+			// this column divided by the round trips: a wall time rounded to a
+			// tenth of a millisecond would publish a µs-per-round-trip that a
+			// reader dividing the published numbers could not reproduce.
+			fmt.Sprintf("%.3f", r.wallMS),
 			strconv.FormatInt(r.loopUS, 10),
 			fmt.Sprintf("%.2f", r.microsPerRoundTrip()),
 			fmt.Sprintf("%.0f", r.roundTripsPerSecond()),
@@ -160,13 +171,15 @@ func writeMarkdown(f *os.File, rows []row, info machineInfo) error {
 	b.WriteString("figure says how fast the machine is, and with them it says how much of the time\n")
 	b.WriteString("is the language.\n\n")
 
+	b.WriteString("![What a round trip costs, by message size](round-trip.svg)\n\n")
+
 	b.WriteString("| client | message size | round trips | wall ms | µs per round trip | round trips/s | MB/s |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 
 	for _, r := range rows {
-		fmt.Fprintf(&b, "| %s | %s | %s | %.0f | %.1f | %s | %.1f |\n",
+		fmt.Fprintf(&b, "| %s | %s | %s | %.0f | %.1f | %s | %s |\n",
 			r.impl, commas(r.size), commas(r.count), r.wallMS,
-			r.microsPerRoundTrip(), commas(int(r.roundTripsPerSecond())), r.megabytesPerSecond())
+			r.microsPerRoundTrip(), commas(int(r.roundTripsPerSecond())), commasFloat(r.megabytesPerSecond(), 1))
 	}
 
 	b.WriteString("\n")
@@ -191,7 +204,9 @@ func writeMarkdown(f *os.File, rows []row, info machineInfo) error {
 
 	b.WriteString("## What is measured\n\n")
 	b.WriteString("- **wall ms** is the whole client process, from `fork` to exit: reading the source,\n")
-	b.WriteString("  parsing it, connecting, and doing the work.\n")
+	b.WriteString("  parsing it, connecting, and doing the work. The CSV carries it to the microsecond,\n")
+	b.WriteString("  which is the resolution of the clock it was read from, so that the µs-per-round-trip\n")
+	b.WriteString("  column beside it is what a reader gets by dividing the two published numbers.\n")
 	b.WriteString("- **µs per round trip** is `wall ms` divided by the number of round trips. It is the\n")
 	b.WriteString("  number a person means by latency.\n")
 	b.WriteString("- **MB/s** counts both directions, because every byte is sent and comes back.\n")
@@ -243,14 +258,31 @@ func writeMarkdown(f *os.File, rows []row, info machineInfo) error {
 	return nil
 }
 
-func writeHTML(f *os.File, rows []row, info machineInfo) error {
-	fastest := 0.0
-	for _, r := range rows {
-		if mb := r.megabytesPerSecond(); mb > fastest {
-			fastest = mb
-		}
+// writePage writes reports/index.html, which is the whole measurement on one
+// page: both figures, both tables, and what is and is not being measured.
+//
+// The figures are inlined into the page rather than linked as images. An image
+// is a picture of a chart; inline SVG is the chart, and a reader can hover a
+// point to be told what it is. The files are still written to disk beside the
+// page, so the Markdown reports and anyone quoting a figure on its own have
+// them.
+func writePage(dir string, rows []row, latency []latencyRow, info machineInfo) error {
+	path := filepath.Join(dir, "index.html")
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
 	}
 
+	if err := writeHTML(f, rows, latency, info); err != nil {
+		f.Close()
+		return fmt.Errorf("%s: %w", path, err)
+	}
+
+	return f.Close()
+}
+
+func writeHTML(f *os.File, rows []row, latency []latencyRow, info machineInfo) error {
 	var b strings.Builder
 
 	b.WriteString(`<!doctype html>
@@ -269,10 +301,9 @@ func writeHTML(f *os.File, rows []row, info machineInfo) error {
   th, td { padding: .5rem .6rem; border-bottom: 1px solid rgba(128,128,128,.3); text-align: right; }
   th:first-child, td:first-child { text-align: left; }
   thead th { border-bottom-width: 2px; }
-  .bar { background: rgba(128,128,128,.25); border-radius: 2px; height: .7rem; min-width: 1px; }
-  .impl-ccwig .bar { background: #4a7fe0; }
-  .impl-go .bar { background: #d2713c; }
-  .bar-cell { width: 30%; }
+  figure { margin: 0; }
+  svg.chart { max-width: 100%; height: auto; }
+  figcaption { margin: .5rem 0 0; font-size: .9rem; opacity: .75; }
   ul { padding-left: 1.2rem; }
   li { margin: .3rem 0; }
   footer { margin-top: 2rem; opacity: .7; font-size: .9rem; }
@@ -285,21 +316,23 @@ func writeHTML(f *os.File, rows []row, info machineInfo) error {
 	b.WriteString("<h1>CCWIG network benchmark</h1>\n")
 	b.WriteString("<p class=\"lead\">How fast a CCWIG program moves bytes over a loopback TCP connection, against the same exchange written in Go.</p>\n")
 
+	// The caption does not repeat the machine line, because the figure carries
+	// it already - the same sentence twice, one line apart, is the sort of thing
+	// that makes a reader stop trusting the rest of the page.
+	b.WriteString("<figure>\n")
+	b.WriteString(roundTripSVG(rows, info))
+	b.WriteString("<figcaption>Every figure on this page is drawn from the rows in the tables below, by the program that measured them.</figcaption>\n")
+	b.WriteString("</figure>\n")
+
 	b.WriteString("<table>\n<thead><tr>")
 	b.WriteString("<th>client</th><th>message size</th><th>round trips</th><th>wall ms</th>")
-	b.WriteString("<th>µs per round trip</th><th>round trips/s</th><th>MB/s</th><th class=\"bar-cell\">throughput</th>")
+	b.WriteString("<th>µs per round trip</th><th>round trips/s</th><th>MB/s</th>")
 	b.WriteString("</tr></thead>\n<tbody>\n")
 
 	for _, r := range rows {
-		width := 0.0
-		if fastest > 0 {
-			width = r.megabytesPerSecond() / fastest * 100
-		}
-
-		fmt.Fprintf(&b, "<tr class=\"impl-%s\"><td>%s</td><td>%s</td><td>%s</td><td>%.0f</td><td>%.1f</td><td>%s</td><td>%.1f</td>",
+		fmt.Fprintf(&b, "<tr class=\"impl-%s\"><td>%s</td><td>%s</td><td>%s</td><td>%.0f</td><td>%.1f</td><td>%s</td><td>%s</td></tr>\n",
 			html.EscapeString(r.impl), html.EscapeString(r.impl), commas(r.size), commas(r.count),
-			r.wallMS, r.microsPerRoundTrip(), commas(int(r.roundTripsPerSecond())), r.megabytesPerSecond())
-		fmt.Fprintf(&b, "<td class=\"bar-cell\"><div class=\"bar\" style=\"width:%.1f%%\"></div></td></tr>\n", width)
+			r.wallMS, r.microsPerRoundTrip(), commas(int(r.roundTripsPerSecond())), commasFloat(r.megabytesPerSecond(), 1))
 	}
 
 	b.WriteString("</tbody>\n</table>\n")
@@ -315,11 +348,29 @@ func writeHTML(f *os.File, rows []row, info machineInfo) error {
 	b.WriteString("<p>Not the kernel's TCP. Loopback is the fastest and least interesting network there is. The numbers are about the interpreter: how much work stands between a program saying <code>net_send</code> and the bytes leaving the process. The Go rows are the control for that &mdash; the same work, same machine, no interpreter.</p>\n")
 
 	b.WriteString("<h2>When the network costs something</h2>\n")
-	b.WriteString("<p>Loopback is the one network on which the interpreter's share of a round trip is large, and the one on which it does not matter to anybody. The <a href=\"latency.md\">latency sweep</a> asks the other question: the same two clients, the same exchange, against a server that waits before it answers, so that a round trip costs what a real one costs.</p>\n")
+	b.WriteString("<p>Loopback is the one network on which the interpreter's share of a round trip is large, and the one on which it does not matter to anybody. The same two clients meet a server that waits before it answers, which is what a round trip over a real network costs. The wait is the harness's and is known exactly, so what a row shows beyond it is what is not the network.</p>\n")
+
+	b.WriteString("<figure>\n")
+	b.WriteString(shareSVG(latency, info))
+	b.WriteString("<figcaption>The full account, including why the last three rows are a ceiling rather than a measurement, is in the <a href=\"latency.md\">latency sweep</a>.</figcaption>\n")
+	b.WriteString("</figure>\n")
+
+	b.WriteString("<table>\n<thead><tr>")
+	b.WriteString("<th>server delay</th><th>CCWIG µs/round trip</th><th>Go µs/round trip</th><th>difference</th><th>CCWIG's share</th>")
+	b.WriteString("</tr></thead>\n<tbody>\n")
+
+	for _, r := range latency {
+		fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
+			html.EscapeString(delayLabel(r.delayMS)),
+			commasFloat(r.ccwigMicros, 1), commasFloat(r.goMicros, 1),
+			commasFloat(r.gapMicros(), 1), percent(r.gapShare()))
+	}
+
+	b.WriteString("</tbody>\n</table>\n")
 
 	b.WriteString("<h2>How to reproduce</h2>\n")
 	b.WriteString("<pre><code>make report</code></pre>\n")
-	b.WriteString("<p>The data behind the table is <a href=\"netbench.csv\">netbench.csv</a>; the sweep's data is <a href=\"latency.csv\">latency.csv</a>.</p>\n")
+	b.WriteString("<p>The data behind the tables is <a href=\"netbench.csv\">netbench.csv</a> and <a href=\"latency.csv\">latency.csv</a>; the figures on their own are <a href=\"round-trip.svg\">round-trip.svg</a> and <a href=\"interpreter-share.svg\">interpreter-share.svg</a>.</p>\n")
 
 	fmt.Fprintf(&b, "<footer>%s", html.EscapeString(info.describe()))
 
@@ -412,4 +463,31 @@ func commas(n int) string {
 	}
 
 	return b.String()
+}
+
+// commasFloat is commas for a number with a decimal point: it groups the whole
+// part and leaves the fraction alone. It exists because the alternative is a
+// table where the round trips read "20,000" and the megabytes beside them read
+// "1769.8", which is the same number written two different ways in one row.
+func commasFloat(v float64, decimals int) string {
+	text := strconv.FormatFloat(v, 'f', decimals, 64)
+
+	point := strings.Index(text, ".")
+	if point < 0 {
+		point = len(text)
+	}
+
+	whole, fraction := text[:point], text[point:]
+
+	sign := ""
+	if strings.HasPrefix(whole, "-") {
+		sign, whole = "-", whole[1:]
+	}
+
+	n, err := strconv.Atoi(whole)
+	if err != nil {
+		return text
+	}
+
+	return sign + commas(n) + fraction
 }

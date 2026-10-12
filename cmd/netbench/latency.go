@@ -80,6 +80,16 @@ type latencyRow struct {
 	ccwigMicros float64
 	goMicros    float64
 	mismatches  int
+
+	// publishedGap and publishedShare are the difference and the share as they
+	// were written to the CSV, and are set only when a test reads a report back.
+	// They are here rather than recomputed from the two columns beside them
+	// because recomputing gets a slightly different number: the columns are
+	// rounded for publication, and two roundings in a row are not the same as
+	// the figure that was published. A test comparing a report with a report
+	// has to read the reports.
+	publishedGap   float64
+	publishedShare float64
 }
 
 // gapMicros is what the interpreter costs on top of the Go client: the same
@@ -287,12 +297,15 @@ func writeLatencyMarkdown(f *os.File, rows []latencyRow, info machineInfo) error
 	b.WriteString("front of each reply; the only thing that differs between the two rows of a line is\n")
 	b.WriteString("the language the client was written in.\n\n")
 
+	b.WriteString("![The interpreter's share of a round trip, against server delay](interpreter-share.svg)\n\n")
+
 	b.WriteString("| server delay | CCWIG µs/round trip | Go µs/round trip | difference | CCWIG's share |\n")
 	b.WriteString("| ---: | ---: | ---: | ---: | ---: |\n")
 
 	for _, r := range rows {
-		fmt.Fprintf(&b, "| %d ms | %.1f | %.1f | %.1f | %.2f%% |\n",
-			r.delayMS, r.ccwigMicros, r.goMicros, r.gapMicros(), r.gapShare())
+		fmt.Fprintf(&b, "| %d ms | %s | %s | %s | %.2f%% |\n",
+			r.delayMS, commasFloat(r.ccwigMicros, 1), commasFloat(r.goMicros, 1),
+			commasFloat(r.gapMicros(), 1), r.gapShare())
 	}
 
 	b.WriteString("\n")
@@ -375,9 +388,15 @@ func writeLatencySentence(b *strings.Builder, rows []latencyRow) {
 
 	worst := latencyWidestGap(rows)
 
-	fmt.Fprintf(b, "The round trip grows from **%.0f µs** to **%.0f µs** down this table, and the\n", first.ccwigMicros, last.ccwigMicros)
-	fmt.Fprintf(b, "difference between the two clients never exceeded **%.0f µs** of it. At the longest\n", worst)
-	fmt.Fprintf(b, "round trip here - %d ms of delay - %.0f µs is **%.2f%%** of what a person would wait.\n\n", last.delayMS, worst, worst/last.ccwigMicros*100)
+	// The durations go through the same formatter the figures use, so that a
+	// sentence about the table and the table itself do not give the same
+	// number two different units - and so that the longest round trip here
+	// reads as 52 ms rather than as 52047 microseconds with no separator in it.
+	fmt.Fprintf(b, "The round trip grows from **%s** to **%s** down this table, and the\n",
+		micros(first.ccwigMicros), micros(last.ccwigMicros))
+	fmt.Fprintf(b, "difference between the two clients never exceeded **%s** of it. At the longest\n", micros(worst))
+	fmt.Fprintf(b, "round trip here - %d ms of delay - %s is **%.2f%%** of what a person would wait.\n\n",
+		last.delayMS, micros(worst), worst/last.ccwigMicros*100)
 
 	b.WriteString("That is a bound rather than a measurement, and deliberately. The difference is\n")
 	b.WriteString("divided by the number of round trips, so the fewer of them a row has, the more of\n")

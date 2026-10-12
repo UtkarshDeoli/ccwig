@@ -3,14 +3,19 @@
 //
 // It starts an echo server, has each client send a payload and wait for it to
 // come back, a fixed number of times, and writes what it measured to
-// reports/netbench.csv, reports/netbench.md and reports/index.html.
+// reports/netbench.csv and reports/netbench.md.
 //
 // It then does it again against a server that waits before it answers, which
 // puts the same exchange on a network that costs what a real one costs, and
-// writes that to reports/latency.csv, reports/latency.md. The main report
+// writes that to reports/latency.csv and reports/latency.md. The main report
 // answers how much of a loopback round trip is the interpreter; the sweep
 // answers whether that matters, and the sweep is the one with an interesting
 // answer.
+//
+// Two figures are drawn from the same rows - reports/round-trip.svg and
+// reports/interpreter-share.svg - and reports/index.html is both reports,
+// both figures and both tables in one page. Every number in every one of the
+// seven files comes from the same two sets of measurements.
 //
 //	netbench                                   run it and write the reports
 //	netbench -quick                            a short run, for a smoke check
@@ -192,10 +197,6 @@ func benchmark(opts options) error {
 		}
 	}
 
-	if err := writeReports(opts.out, rows, info); err != nil {
-		return err
-	}
-
 	// The second question, with a server that waits before it answers.
 	latencyConfigs := fullLatency
 	if opts.quick {
@@ -216,15 +217,30 @@ func benchmark(opts options) error {
 		latency = append([]latencyRow{zero}, latency...)
 	}
 
+	// Nothing is written until both measurements are in hand. The page holds
+	// both of them, and a page that had to be written before the second one
+	// existed would be a page missing half of what it says - which is the sort
+	// of quiet half-truth a report is supposed to be the end of.
+	if err := writeReports(opts.out, rows, info); err != nil {
+		return err
+	}
 	if err := writeLatencyReports(opts.out, latency, info); err != nil {
 		return err
 	}
+	if err := writeCharts(opts.out, rows, latency, info); err != nil {
+		return err
+	}
+	if err := writePage(opts.out, rows, latency, info); err != nil {
+		return err
+	}
 
-	fmt.Printf("\nwrote %s, %s, %s, %s and %s\n",
+	fmt.Printf("\nwrote %s, %s, %s, %s, %s, %s and %s\n",
 		filepath.Join(opts.out, "netbench.csv"),
 		filepath.Join(opts.out, "netbench.md"),
 		filepath.Join(opts.out, "latency.csv"),
 		filepath.Join(opts.out, "latency.md"),
+		filepath.Join(opts.out, "round-trip.svg"),
+		filepath.Join(opts.out, "interpreter-share.svg"),
 		filepath.Join(opts.out, "index.html"))
 
 	return nil
