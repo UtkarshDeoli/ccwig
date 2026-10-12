@@ -2,6 +2,7 @@
 /bin/
 /ccwig
 /ccwig-*
+/netbench
 *.exe
 
 # Go test and coverage artefacts

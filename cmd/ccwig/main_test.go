@@ -156,14 +156,57 @@ func TestUnknownFlagIsAUsageError(t *testing.T) {
 	}
 }
 
-func TestBothASourceAndAFileIsAUsageError(t *testing.T) {
-	code, _, stderr := exec(t, "", "-e", "print(1);", "file.cw")
-
-	if code != 2 {
-		t.Errorf("expected exit code 2, got %d", code)
+func TestArgumentsAfterTheFileReachTheProgram(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "args.cw")
+	if err := os.WriteFile(path, []byte("print(args());"), 0o644); err != nil {
+		t.Fatalf("writing the test program: %v", err)
 	}
-	if !strings.Contains(stderr, "not both") {
-		t.Errorf("expected an explanatory message, got %q", stderr)
+
+	code, stdout, stderr := exec(t, "", path, "one", "two")
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr: %s)", code, stderr)
+	}
+	if stdout != "[one, two]\n" {
+		t.Errorf("expected the program's own arguments, got %q", stdout)
+	}
+}
+
+func TestArgumentsAfterEvalReachTheProgram(t *testing.T) {
+	code, stdout, stderr := exec(t, "", "-e", "print(args());", "a", "b")
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr: %s)", code, stderr)
+	}
+	if stdout != "[a, b]\n" {
+		t.Errorf("expected [a, b], got %q", stdout)
+	}
+}
+
+func TestStandardInputIsReadable(t *testing.T) {
+	code, stdout, stderr := exec(t, "one\ntwo\n", "-e",
+		"print(readLine()); print(readLine()); print(readLine());")
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr: %s)", code, stderr)
+	}
+	if stdout != "one\ntwo\nnull\n" {
+		t.Errorf("expected two lines then null at end of input, got %q", stdout)
+	}
+}
+
+func TestExitBecomesTheProcessStatus(t *testing.T) {
+	code, stdout, stderr := exec(t, "", "-e", `print("before"); exit(4); print("after");`)
+
+	if code != 4 {
+		t.Errorf("expected exit code 4, got %d", code)
+	}
+	if stdout != "before\n" {
+		t.Errorf("expected output from before the exit only, got %q", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("expected an exit to report nothing, got %q", stderr)
 	}
 }
 

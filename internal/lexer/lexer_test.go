@@ -309,8 +309,8 @@ func TestLexerErrors(t *testing.T) {
 		{"unterminated string", `"abc`, token.ILLEGAL},
 		{"malformed number", "3.", token.ILLEGAL},
 		{"unterminated block comment", "/* nope", token.EOF},
-		{"bare ampersand", "a & b", token.ILLEGAL},
-		{"bare pipe", "a | b", token.ILLEGAL},
+		{"hex with no digits", "0x", token.ILLEGAL},
+		{"binary with no digits", "0b", token.ILLEGAL},
 		{"stray character", "a @ b", token.ILLEGAL},
 	}
 
@@ -370,5 +370,87 @@ func TestNulByteIsReportedNotSilentlyTruncated(t *testing.T) {
 	errs := l.Errors()
 	if len(errs) == 0 {
 		t.Fatal("expected an error for a NUL byte in the source")
+	}
+}
+
+func TestBitwiseOperators(t *testing.T) {
+	// `&` and `|` must not swallow the `&&` and `||` forms, and `<<` and `>>`
+	// must not be read as `<` `=` or `>` `=`.
+	input := `a & b | c ^ d ~e && f || g << h >> i <= j >= k < l > m`
+
+	want := []struct {
+		typ token.Type
+		lit string
+	}{
+		{token.IDENT, "a"},
+		{token.AMPERSAND, "&"},
+		{token.IDENT, "b"},
+		{token.PIPE, "|"},
+		{token.IDENT, "c"},
+		{token.CARET, "^"},
+		{token.IDENT, "d"},
+		{token.TILDE, "~"},
+		{token.IDENT, "e"},
+		{token.AND, "&&"},
+		{token.IDENT, "f"},
+		{token.OR, "||"},
+		{token.IDENT, "g"},
+		{token.SHL, "<<"},
+		{token.IDENT, "h"},
+		{token.SHR, ">>"},
+		{token.IDENT, "i"},
+		{token.LE, "<="},
+		{token.IDENT, "j"},
+		{token.GE, ">="},
+		{token.IDENT, "k"},
+		{token.LT, "<"},
+		{token.IDENT, "l"},
+		{token.GT, ">"},
+		{token.IDENT, "m"},
+	}
+
+	l := New(input)
+	for i, w := range want {
+		tok := l.NextToken()
+		if tok.Type != w.typ || tok.Literal != w.lit {
+			t.Fatalf("token %d: want %s(%q), got %s(%q)", i, w.typ, w.lit, tok.Type, tok.Literal)
+		}
+	}
+
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lexer errors: %v", errs)
+	}
+}
+
+func TestRadixIntegerLiterals(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"0xff", "0xff"},
+		{"0XFF", "0XFF"},
+		{"0b1010", "0b1010"},
+		{"0o17", "0o17"},
+		{"010", "010"}, // no prefix: decimal, not C's octal
+	}
+
+	for _, tt := range tests {
+		l := New(tt.input)
+		tok := l.NextToken()
+		if tok.Type != token.INT || tok.Literal != tt.want {
+			t.Fatalf("input %q: want INT(%q), got %s(%q)", tt.input, tt.want, tok.Type, tok.Literal)
+		}
+	}
+}
+
+func TestRadixPrefixWithoutDigitsIsAnError(t *testing.T) {
+	for _, input := range []string{"0x", "0b", "0o", "0xg"} {
+		l := New(input)
+		if tok := l.NextToken(); tok.Type != token.ILLEGAL {
+			t.Fatalf("input %q: want ILLEGAL, got %s(%q)", input, tok.Type, tok.Literal)
+		}
+		if len(l.Errors()) == 0 {
+			t.Fatalf("input %q: expected a lexer error", input)
+		}
 	}
 }

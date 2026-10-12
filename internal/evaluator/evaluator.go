@@ -7,14 +7,17 @@
 package evaluator
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/UtkarshDeoli/ccwig/internal/ast"
 	"github.com/UtkarshDeoli/ccwig/internal/object"
+	"github.com/UtkarshDeoli/ccwig/internal/sockets"
 	"github.com/UtkarshDeoli/ccwig/internal/token"
 )
 
@@ -51,7 +54,11 @@ const (
 // BuiltinNames lists the built-in functions in documentation order.
 var BuiltinNames = []string{
 	builtinPrint, builtinLen, builtinPush, builtinFill, builtinFirst, builtinLast, builtinRest, builtinType, builtinStr,
+	builtinOrd, builtinChr, builtinSubstr, builtinSplit, builtinJoin, builtinFind, builtinUpper, builtinLower,
 	builtinClear, builtinSleep,
+	builtinArgs, builtinReadLine, builtinReadAll, builtinReadFile, builtinWriteFile, builtinTime, builtinExit,
+	builtinNetListen, builtinNetAccept, builtinNetConnect, builtinNetSend, builtinNetRecv,
+	builtinNetRecvLine, builtinNetClose, builtinNetSetTimeout, builtinNetAddr, builtinNetError,
 }
 
 // clearScreen is what `clear` writes: erase the whole screen, then move the
@@ -68,10 +75,23 @@ type Evaluator struct {
 	// MaxDepth bounds how deeply user function calls may nest. Zero means
 	// DefaultMaxDepth.
 	MaxDepth int
+	// In is the standard input that `readLine` and `readAll` read. A nil In
+	// means there is no input to read, and asking for some is an error.
+	In io.Reader
+	// Args is what `args()` returns: the arguments the program was given,
+	// without the name of the interpreter or the file it came from.
+	Args []string
 
 	builtins map[string]*object.Builtin
 	steps    int
 	depth    int
+	// stdin is the buffered reader over In, created on first use, and
+	// stdinFor is the In it was created for so that replacing In on a reused
+	// evaluator starts reading the new one rather than the old.
+	stdin    *bufio.Reader
+	stdinFor io.Reader
+	// socks holds this evaluator's open sockets, created on first use.
+	socks *sockets.Registry
 }
 
 // New returns an Evaluator writing program output to out.
@@ -80,6 +100,14 @@ func New(out io.Writer) *Evaluator {
 	e.builtins = e.newBuiltins()
 	return e
 }
+
+// ResetCallDepth returns the call-depth counter to zero.
+//
+// It exists for the one case where evaluation stops without unwinding
+// normally: `exit` panics out of the evaluator, skipping the depth decrement
+// that every other return path performs, so an interpreter that survives the
+// exit would otherwise believe it was still several calls deep.
+func (e *Evaluator) ResetCallDepth() { e.depth = 0 }
 
 // Eval evaluates node in env and returns the resulting value.
 func (e *Evaluator) Eval(node ast.Node, env *object.Environment) object.Object {
@@ -433,6 +461,16 @@ func (e *Evaluator) evalPrefixExpression(tok token.Token, operator string, right
 		default:
 			return object.NewError(tok.Pos, "unknown operator: -%s", right.Type())
 		}
+	case "~":
+		// Bitwise complement, which C spells the same way and Go spells ^.
+		// It is defined on integers only, so a float is reported rather than
+		// converted.
+		switch operand := right.(type) {
+		case *object.Integer:
+			return &object.Integer{Value: ^operand.Value}
+		default:
+			return object.NewError(tok.Pos, "unknown operator: ~%s", right.Type())
+		}
 	default:
 		return object.NewError(tok.Pos, "unknown operator: %s%s", operator, right.Type())
 	}
@@ -559,6 +597,16 @@ func evalIntegerInfix(tok token.Token, operator string, left, right *object.Inte
 			return object.NewError(tok.Pos, "modulo by zero")
 		}
 		return &object.Integer{Value: left.Value % right.Value}
+	case "&":
+		return &object.Integer{Value: left.Value & right.Value}
+	case "|":
+		return &object.Integer{Value: left.Value | right.Value}
+	case "^":
+		return &object.Integer{Value: left.Value ^ right.Value}
+	case "<<":
+		return shiftInteger(tok, "<<", left.Value, right.Value)
+	case ">>":
+		return shiftInteger(tok, ">>", left.Value, right.Value)
 	case "<":
 		return nativeToBoolean(left.Value < right.Value)
 	case ">":
@@ -570,6 +618,26 @@ func evalIntegerInfix(tok token.Token, operator string, left, right *object.Inte
 	default:
 		return object.NewError(tok.Pos, "unknown operator: INTEGER %s INTEGER", operator)
 	}
+}
+
+// shiftInteger applies `<<` or `>>` to two integers.
+//
+// C leaves a shift by a negative count, or by a count at or beyond the width
+// of the type, undefined. Neither is a panic here: a negative count is
+// reported as an error, and an oversized count follows Go, where shifting an
+// int64 by 64 or more yields zero for `<<` and the sign for `>>`. Defined
+// behaviour beats undefined behaviour even when the definition is arbitrary.
+func shiftInteger(tok token.Token, operator string, value, count int64) object.Object {
+	if count < 0 {
+		return object.NewError(tok.Pos, "shift by a negative amount: %d", count)
+	}
+	// The conversion is safe: count is non-negative, and a count of 64 or more
+	// is defined rather than a panic.
+	shift := uint64(count)
+	if operator == "<<" {
+		return &object.Integer{Value: value << shift}
+	}
+	return &object.Integer{Value: value >> shift}
 }
 
 // evalFloatInfix handles an operation where at least one operand is a FLOAT.
@@ -648,6 +716,12 @@ func (e *Evaluator) evalIndexAssignment(tok token.Token, target *ast.IndexExpres
 
 	arr, ok := left.(*object.Array)
 	if !ok {
+		if _, isString := left.(*object.String); isString {
+			// s[i] reads a character; there is no s[i] = c, because a string
+			// is immutable and every index into it would have to be rewritten
+			// to keep `len` honest.
+			return object.NewError(tok.Pos, "cannot assign to a character in a string; strings are immutable")
+		}
 		return object.NewError(tok.Pos, "index operator not supported: %s", left.Type())
 	}
 
@@ -670,23 +744,33 @@ func (e *Evaluator) evalIndexAssignment(tok token.Token, target *ast.IndexExpres
 }
 
 func (e *Evaluator) evalIndexExpression(tok token.Token, left, index object.Object) object.Object {
-	arr, ok := left.(*object.Array)
-	if !ok {
-		return object.NewError(tok.Pos, "index operator not supported: %s", left.Type())
-	}
-
 	idx, ok := index.(*object.Integer)
 	if !ok {
 		return object.NewError(tok.Pos, "index must be an integer, got %s", index.Type())
 	}
 
-	// Reading outside the array yields null rather than failing, so callers
-	// can test for an absent element with `== null`.
-	if idx.Value < 0 || idx.Value >= int64(len(arr.Elements)) {
-		return object.NullValue()
-	}
+	switch container := left.(type) {
+	case *object.Array:
+		// Reading outside the array yields null rather than failing, so callers
+		// can test for an absent element with `== null`.
+		if idx.Value < 0 || idx.Value >= int64(len(container.Elements)) {
+			return object.NullValue()
+		}
+		return container.Elements[idx.Value]
 
-	return arr.Elements[idx.Value]
+	case *object.String:
+		// A character of a string, as a one-character string. The index counts
+		// characters to match `len`, so `s[i]` for the last i is the last
+		// character even when the text is not ASCII.
+		runes := []rune(container.Value)
+		if idx.Value < 0 || idx.Value >= int64(len(runes)) {
+			return object.NullValue()
+		}
+		return &object.String{Value: string(runes[idx.Value])}
+
+	default:
+		return object.NewError(tok.Pos, "index operator not supported: %s", left.Type())
+	}
 }
 
 // ---------------------------------------------------------------- functions
@@ -759,7 +843,7 @@ func unwrapReturn(result object.Object) object.Object {
 // ------------------------------------------------------------------ builtins
 
 func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
-	return map[string]*object.Builtin{
+	builtins := map[string]*object.Builtin{
 		builtinPrint: {
 			Name: builtinPrint,
 			Fn: func(args []object.Object) object.Object {
@@ -967,6 +1051,12 @@ func (e *Evaluator) newBuiltins() map[string]*object.Builtin {
 			},
 		},
 	}
+
+	maps.Copy(builtins, e.stringBuiltins())
+	maps.Copy(builtins, e.ioBuiltins())
+	maps.Copy(builtins, e.netBuiltins())
+
+	return builtins
 }
 
 // expectArgs checks a builtin's arity.

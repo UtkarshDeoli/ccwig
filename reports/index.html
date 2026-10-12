@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCWIG network benchmark</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0 auto; padding: 2rem 1.5rem 4rem; max-width: 60rem;
+         font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  p.lead { margin-top: 0; opacity: .8; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; font-variant-numeric: tabular-nums; }
+  th, td { padding: .5rem .6rem; border-bottom: 1px solid rgba(128,128,128,.3); text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-bottom-width: 2px; }
+  figure { margin: 0; }
+  svg.chart { max-width: 100%; height: auto; }
+  figcaption { margin: .5rem 0 0; font-size: .9rem; opacity: .75; }
+  ul { padding-left: 1.2rem; }
+  li { margin: .3rem 0; }
+  footer { margin-top: 2rem; opacity: .7; font-size: .9rem; }
+  code { font-size: .95em; }
+</style>
+</head>
+<body>
+<h1>CCWIG network benchmark</h1>
+<p class="lead">How fast a CCWIG program moves bytes over a loopback TCP connection, against the same exchange written in Go.</p>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="486" viewBox="0 0 760 486" class="chart" role="img" aria-label="Grouped bar chart of microseconds per round trip against message size, for a CCWIG client and a Go client.">
+<style>
+  .chart { --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+           --grid:#e1e0d9; --axis:#c3c2b7; --s1:#2a78d6; --s2:#eb6834; }
+  @media (prefers-color-scheme: dark) {
+    .chart { --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7;
+             --grid:#2c2c2a; --axis:#383835; --s1:#3987e5; --s2:#d95926; }
+  }
+  .chart text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .t-title { font-size:15px; font-weight:600; fill:var(--ink); }
+  .t-sub   { font-size:12.5px; fill:var(--muted); }
+  .t-tick  { font-size:11.5px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+  /* Value labels wear a halo of the surface they are drawn on. A label that
+     sits above its point is still in the road of the line arriving at it from
+     a steeper neighbour, or of a gridline, and half a label struck through is
+     a wrong number. The halo is the surface colour rather than a white, so it
+     is invisible on the page and still invisible on the dark one. */
+  .t-value { font-size:12px; fill:var(--ink2); font-variant-numeric:tabular-nums;
+             paint-order:stroke fill; stroke:var(--surface); stroke-width:3px;
+             stroke-linejoin:round; }
+  .t-key   { font-size:12px; fill:var(--ink2); }
+  .t-foot  { font-size:11px; fill:var(--muted); }
+  .grid { stroke:var(--grid); stroke-width:1; }
+  .axis { stroke:var(--axis); stroke-width:1; }
+  .s1 { fill:var(--s1); }
+  .s2 { fill:var(--s2); }
+  .line1 { stroke:var(--s1); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; fill:none; }
+  .dot1 { fill:var(--s1); stroke:var(--surface); stroke-width:2; }
+</style>
+<g class="chart">
+<rect x="0.5" y="0.5" width="759" height="485.0" rx="8" fill="var(--surface)" stroke="var(--grid)"/>
+<text class="t-title" x="28" y="30">What a round trip costs, by message size</text>
+<text class="t-sub" x="28" y="52">One round trip is a send and the matching reply, over loopback TCP. The bar is the median of three whole client processes.</text>
+<rect class="s1" x="28.0" y="70.0" width="12" height="12" rx="3"/>
+<text class="t-key" x="46.0" y="80.5">CCWIG client (interpreted)</text>
+<rect class="s2" x="268.0" y="70.0" width="12" height="12" rx="3"/>
+<text class="t-key" x="286.0" y="80.5">Go client (the control)</text>
+<line class="grid" x1="104.0" y1="112.0" x2="104.0" y2="400.0"/>
+<text class="t-tick" x="104.0" y="422" text-anchor="middle">0</text>
+<line class="grid" x1="250.0" y1="112.0" x2="250.0" y2="400.0"/>
+<text class="t-tick" x="250.0" y="422" text-anchor="middle">10</text>
+<line class="grid" x1="396.0" y1="112.0" x2="396.0" y2="400.0"/>
+<text class="t-tick" x="396.0" y="422" text-anchor="middle">20</text>
+<line class="grid" x1="542.0" y1="112.0" x2="542.0" y2="400.0"/>
+<text class="t-tick" x="542.0" y="422" text-anchor="middle">30</text>
+<line class="grid" x1="688.0" y1="112.0" x2="688.0" y2="400.0"/>
+<text class="t-tick" x="688.0" y="422" text-anchor="middle">40</text>
+<text class="t-tick" x="90.0" y="144.8" text-anchor="end">64</text>
+<path class="s1" d="M 104.0 117.8 H 343.3 A 4.0 4.0 0 0 1 347.3 121.8 V 135.8 A 4.0 4.0 0 0 1 343.3 139.8 Z"/>
+<text class="t-value" x="355.3" y="132.8">16.7</text>
+<path class="s2" d="M 104.0 141.8 H 312.1 A 4.0 4.0 0 0 1 316.1 145.8 V 159.8 A 4.0 4.0 0 0 1 312.1 163.8 Z"/>
+<text class="t-tick" x="90.0" y="202.4" text-anchor="end">256</text>
+<path class="s1" d="M 104.0 175.4 H 345.3 A 4.0 4.0 0 0 1 349.3 179.4 V 193.4 A 4.0 4.0 0 0 1 345.3 197.4 Z"/>
+<text class="t-value" x="357.3" y="190.4">16.8</text>
+<path class="s2" d="M 104.0 199.4 H 313.8 A 4.0 4.0 0 0 1 317.8 203.4 V 217.4 A 4.0 4.0 0 0 1 313.8 221.4 Z"/>
+<text class="t-tick" x="90.0" y="260.0" text-anchor="end">1,024</text>
+<path class="s1" d="M 104.0 233.0 H 364.8 A 4.0 4.0 0 0 1 368.8 237.0 V 251.0 A 4.0 4.0 0 0 1 364.8 255.0 Z"/>
+<text class="t-value" x="376.8" y="248.0">18.1</text>
+<path class="s2" d="M 104.0 257.0 H 315.6 A 4.0 4.0 0 0 1 319.6 261.0 V 275.0 A 4.0 4.0 0 0 1 315.6 279.0 Z"/>
+<text class="t-tick" x="90.0" y="317.6" text-anchor="end">4,096</text>
+<path class="s1" d="M 104.0 290.6 H 410.2 A 4.0 4.0 0 0 1 414.2 294.6 V 308.6 A 4.0 4.0 0 0 1 410.2 312.6 Z"/>
+<text class="t-value" x="422.2" y="305.6">21.2</text>
+<path class="s2" d="M 104.0 314.6 H 322.3 A 4.0 4.0 0 0 1 326.3 318.6 V 332.6 A 4.0 4.0 0 0 1 322.3 336.6 Z"/>
+<text class="t-tick" x="90.0" y="375.2" text-anchor="end">16,384</text>
+<path class="s1" d="M 104.0 348.2 H 596.0 A 4.0 4.0 0 0 1 600.0 352.2 V 366.2 A 4.0 4.0 0 0 1 596.0 370.2 Z"/>
+<text class="t-value" x="608.0" y="363.2">34.0</text>
+<path class="s2" d="M 104.0 372.2 H 365.0 A 4.0 4.0 0 0 1 369.0 376.2 V 390.2 A 4.0 4.0 0 0 1 365.0 394.2 Z"/>
+<line class="axis" x1="104.0" y1="112.0" x2="104.0" y2="400.0"/>
+<text class="t-tick" x="396.0" y="442" text-anchor="middle">microseconds per round trip</text>
+<text class="t-foot" x="28" y="472">go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report</text>
+</g>
+</svg>
+<figcaption>Every figure on this page is drawn from the rows in the tables below, by the program that measured them.</figcaption>
+</figure>
+<table>
+<thead><tr><th>client</th><th>message size</th><th>round trips</th><th>wall ms</th><th>µs per round trip</th><th>round trips/s</th><th>MB/s</th></tr></thead>
+<tbody>
+<tr class="impl-ccwig"><td>ccwig</td><td>64</td><td>20,000</td><td>333</td><td>16.7</td><td>60,017</td><td>7.3</td></tr>
+<tr class="impl-go"><td>go</td><td>64</td><td>20,000</td><td>291</td><td>14.5</td><td>68,826</td><td>8.4</td></tr>
+<tr class="impl-ccwig"><td>ccwig</td><td>256</td><td>20,000</td><td>336</td><td>16.8</td><td>59,511</td><td>29.1</td></tr>
+<tr class="impl-go"><td>go</td><td>256</td><td>20,000</td><td>293</td><td>14.6</td><td>68,292</td><td>33.3</td></tr>
+<tr class="impl-ccwig"><td>ccwig</td><td>1,024</td><td>15,000</td><td>272</td><td>18.1</td><td>55,129</td><td>107.7</td></tr>
+<tr class="impl-go"><td>go</td><td>1,024</td><td>15,000</td><td>222</td><td>14.8</td><td>67,707</td><td>132.2</td></tr>
+<tr class="impl-ccwig"><td>ccwig</td><td>4,096</td><td>10,000</td><td>212</td><td>21.2</td><td>47,060</td><td>367.7</td></tr>
+<tr class="impl-go"><td>go</td><td>4,096</td><td>10,000</td><td>152</td><td>15.2</td><td>65,681</td><td>513.1</td></tr>
+<tr class="impl-ccwig"><td>ccwig</td><td>16,384</td><td>5,000</td><td>170</td><td>34.0</td><td>29,437</td><td>919.9</td></tr>
+<tr class="impl-go"><td>go</td><td>16,384</td><td>5,000</td><td>91</td><td>18.1</td><td>55,100</td><td>1,721.9</td></tr>
+</tbody>
+</table>
+<h2>What is measured</h2>
+<ul>
+<li><strong>wall ms</strong> is the whole client process: reading the source, parsing it, connecting, and doing the work.</li>
+<li><strong>µs per round trip</strong> is <code>wall ms</code> divided by the round trips &mdash; the number a person means by latency.</li>
+<li><strong>MB/s</strong> counts both directions, because every byte is sent and comes back.</li>
+<li>Each row is the middle of the runs, not the fastest: a loopback benchmark on a busy machine has occasional slow runs and no occasional fast ones.</li>
+</ul>
+<h2>What is not measured</h2>
+<p>Not the kernel's TCP. Loopback is the fastest and least interesting network there is. The numbers are about the interpreter: how much work stands between a program saying <code>net_send</code> and the bytes leaving the process. The Go rows are the control for that &mdash; the same work, same machine, no interpreter.</p>
+<h2>When the network costs something</h2>
+<p>Loopback is the one network on which the interpreter's share of a round trip is large, and the one on which it does not matter to anybody. The same two clients meet a server that waits before it answers, which is what a round trip over a real network costs. The wait is the harness's and is known exactly, so what a row shows beyond it is what is not the network.</p>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="428" viewBox="0 0 760 428" class="chart" role="img" aria-label="Line chart of the interpreter&#39;s share of a round trip, in percent, against server delay.">
+<style>
+  .chart { --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+           --grid:#e1e0d9; --axis:#c3c2b7; --s1:#2a78d6; --s2:#eb6834; }
+  @media (prefers-color-scheme: dark) {
+    .chart { --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7;
+             --grid:#2c2c2a; --axis:#383835; --s1:#3987e5; --s2:#d95926; }
+  }
+  .chart text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .t-title { font-size:15px; font-weight:600; fill:var(--ink); }
+  .t-sub   { font-size:12.5px; fill:var(--muted); }
+  .t-tick  { font-size:11.5px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+  /* Value labels wear a halo of the surface they are drawn on. A label that
+     sits above its point is still in the road of the line arriving at it from
+     a steeper neighbour, or of a gridline, and half a label struck through is
+     a wrong number. The halo is the surface colour rather than a white, so it
+     is invisible on the page and still invisible on the dark one. */
+  .t-value { font-size:12px; fill:var(--ink2); font-variant-numeric:tabular-nums;
+             paint-order:stroke fill; stroke:var(--surface); stroke-width:3px;
+             stroke-linejoin:round; }
+  .t-key   { font-size:12px; fill:var(--ink2); }
+  .t-foot  { font-size:11px; fill:var(--muted); }
+  .grid { stroke:var(--grid); stroke-width:1; }
+  .axis { stroke:var(--axis); stroke-width:1; }
+  .s1 { fill:var(--s1); }
+  .s2 { fill:var(--s2); }
+  .line1 { stroke:var(--s1); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; fill:none; }
+  .dot1 { fill:var(--s1); stroke:var(--surface); stroke-width:2; }
+</style>
+<g class="chart">
+<rect x="0.5" y="0.5" width="759" height="427.0" rx="8" fill="var(--surface)" stroke="var(--grid)"/>
+<text class="t-title" x="28" y="30">The interpreter&#39;s share of a round trip, once the network costs something</text>
+<text class="t-sub" x="28" y="52">CCWIG&#39;s round trip less Go&#39;s, as a percentage of CCWIG&#39;s, against a server told to wait before each reply.</text>
+<line class="axis" x1="104.0" y1="324.0" x2="688.0" y2="324.0"/>
+<text class="t-tick" x="90.0" y="328.0" text-anchor="end">0%</text>
+<line class="grid" x1="104.0" y1="266.0" x2="688.0" y2="266.0"/>
+<text class="t-tick" x="90.0" y="270.0" text-anchor="end">5%</text>
+<line class="grid" x1="104.0" y1="208.0" x2="688.0" y2="208.0"/>
+<text class="t-tick" x="90.0" y="212.0" text-anchor="end">10%</text>
+<line class="grid" x1="104.0" y1="150.0" x2="688.0" y2="150.0"/>
+<text class="t-tick" x="90.0" y="154.0" text-anchor="end">15%</text>
+<line class="grid" x1="104.0" y1="92.0" x2="688.0" y2="92.0"/>
+<text class="t-tick" x="90.0" y="96.0" text-anchor="end">20%</text>
+<path class="line1" d="M 177.0 108.1 L 323.0 301.6 L 469.0 319.4 L 615.0 321.6"/>
+<line class="axis" x1="104.0" y1="92.0" x2="104.0" y2="324.0"/>
+<circle class="dot1" cx="177.0" cy="108.1" r="5"/><title>18.6% of a 18 µs round trip at a loopback delay</title>
+<circle class="dot1" cx="323.0" cy="301.6" r="5"/><title>1.9% of a 1.4 ms round trip at a 1 ms delay</title>
+<circle class="dot1" cx="469.0" cy="319.4" r="5"/><title>0.40% of a 11.9 ms round trip at a 10 ms delay</title>
+<circle class="dot1" cx="615.0" cy="321.6" r="5"/><title>0.21% of a 51.9 ms round trip at a 50 ms delay</title>
+<text class="t-value" x="177.0" y="132.1" text-anchor="middle">18.6%</text>
+<text class="t-tick" x="177.0" y="350" text-anchor="middle">loopback</text>
+<text class="t-tick" x="177.0" y="366" text-anchor="middle">18 µs</text>
+<text class="t-value" x="323.0" y="287.6" text-anchor="middle">1.9%</text>
+<text class="t-tick" x="323.0" y="350" text-anchor="middle">1 ms</text>
+<text class="t-tick" x="323.0" y="366" text-anchor="middle">1.4 ms</text>
+<text class="t-value" x="469.0" y="305.4" text-anchor="middle">0.40%</text>
+<text class="t-tick" x="469.0" y="350" text-anchor="middle">10 ms</text>
+<text class="t-tick" x="469.0" y="366" text-anchor="middle">11.9 ms</text>
+<text class="t-value" x="615.0" y="307.6" text-anchor="middle">0.21%</text>
+<text class="t-tick" x="615.0" y="350" text-anchor="middle">50 ms</text>
+<text class="t-tick" x="615.0" y="366" text-anchor="middle">51.9 ms</text>
+<text class="t-tick" x="396.0" y="392" text-anchor="middle">server delay, and what a round trip cost at it</text>
+<text class="t-foot" x="28" y="414">go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report</text>
+</g>
+</svg>
+<figcaption>The full account, including why the last three rows are a ceiling rather than a measurement, is in the <a href="latency.md">latency sweep</a>.</figcaption>
+</figure>
+<table>
+<thead><tr><th>server delay</th><th>CCWIG µs/round trip</th><th>Go µs/round trip</th><th>difference</th><th>CCWIG's share</th></tr></thead>
+<tbody>
+<tr><td>loopback</td><td>17.9</td><td>14.6</td><td>3.3</td><td>18.6%</td></tr>
+<tr><td>1 ms</td><td>1,427.5</td><td>1,400.0</td><td>27.5</td><td>1.9%</td></tr>
+<tr><td>10 ms</td><td>11,932.3</td><td>11,884.7</td><td>47.6</td><td>0.40%</td></tr>
+<tr><td>50 ms</td><td>51,916.7</td><td>51,809.9</td><td>106.7</td><td>0.21%</td></tr>
+</tbody>
+</table>
+<h2>How to reproduce</h2>
+<pre><code>make report</code></pre>
+<p>The data behind the tables is <a href="netbench.csv">netbench.csv</a> and <a href="latency.csv">latency.csv</a>; the figures on their own are <a href="round-trip.svg">round-trip.svg</a> and <a href="interpreter-share.svg">interpreter-share.svg</a>.</p>
+<footer>go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report<br>Every reply matched its request byte for byte.</footer>
+</body>
+</html>

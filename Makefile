@@ -9,7 +9,7 @@ VERSION := 1.0.0
 # enough to be comfortable on a Raspberry Pi Zero.
 LDFLAGS := -s -w
 
-.PHONY: all build install test test-race fuzz bench fmt vet check examples animate huge run clean pi help
+.PHONY: all build install test test-race fuzz bench fmt vet check examples animate huge run clean pi report net todo help
 
 all: check build  ## Format, vet, test and build
 
@@ -61,6 +61,30 @@ huge: build  ## Run the very large maze example
 
 run: build  ## Build and start the REPL
 	./$(BIN_DIR)/$(BINARY)
+
+report: build  ## Run the network benchmark and write reports/
+	@mkdir -p reports
+	# The machine the numbers came from - its system, its architecture, how
+	# many processors it has - is read by the harness and written into the
+	# report. A note here is only for what the harness cannot see, so this one
+	# says nothing rather than repeating what is already there.
+	go run ./cmd/netbench \
+		-out reports \
+		-ccwig $(BIN_DIR)/$(BINARY) \
+		-commit "$$(git rev-parse --short HEAD)" \
+		-note "run by hand with make report"
+	@echo "up to date: reports/netbench.md, reports/netbench.csv, reports/latency.md,"
+	@echo "            reports/latency.csv, reports/round-trip.svg,"
+	@echo "            reports/interpreter-share.svg, reports/index.html"
+
+report-quick: build  ## Same, but short enough to check the harness itself
+	go run ./cmd/netbench -quick -ccwig $(BIN_DIR)/$(BINARY) -out $(shell mktemp -d)
+
+net: build  ## Run the networking examples against real peers
+	go test ./... -run 'Net|Echo|HTTP' -v
+
+todo: build  ## Run the to-do list application
+	./$(BIN_DIR)/$(BINARY) apps/todo/todo.cw
 
 pi:  ## Cross-compile for Raspberry Pi (Zero 2 W is arm64; Zero W is armv6)
 	@mkdir -p $(BIN_DIR)

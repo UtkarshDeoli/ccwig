@@ -50,6 +50,17 @@ func (e *RuntimeError) Error() string {
 	return fmt.Sprintf("%s:%s: %s", e.Filename, e.Pos, e.Message)
 }
 
+// ExitError reports that the program called `exit` and stopped on purpose.
+// It is not a failure, which is why it is a type of its own: the command line
+// turns it into the process status and prints nothing.
+type ExitError struct {
+	Code int
+}
+
+func (e *ExitError) Error() string {
+	return fmt.Sprintf("exit status %d", e.Code)
+}
+
 // Interpreter evaluates CCWIG source. A single Interpreter keeps one global
 // environment, so successive Eval calls share state; that is what lets the
 // REPL remember variables between lines.
@@ -61,6 +72,12 @@ type Interpreter struct {
 	Prompt string
 	// Env is the global environment shared by every Eval call.
 	Env *object.Environment
+	// In is the standard input a program may read with `readLine` or
+	// `readAll`. A nil In means there is none, which is the case in the REPL.
+	In io.Reader
+	// Args is what `args()` returns. It excludes the interpreter and the file
+	// being run.
+	Args []string
 
 	ev *evaluator.Evaluator
 }
@@ -77,7 +94,35 @@ func New(out io.Writer) *Interpreter {
 
 // Eval parses and evaluates src, returning the value of its final statement.
 // filename appears in error messages.
-func (in *Interpreter) Eval(src, filename string) (object.Object, error) {
+//
+// This is the boundary that turns an `exit` panic into an ordinary error, so
+// it is the outermost frame of a program run: the panic unwinds the evaluator
+// to here, where the status code is still available and the interpreter is
+// still usable.
+func (in *Interpreter) Eval(src, filename string) (result object.Object, err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+
+		exit, ok := r.(evaluator.ExitError)
+		if !ok {
+			// Not ours; let it carry on to whoever can deal with it.
+			panic(r)
+		}
+
+		// The panic unwound past the call-depth decrements, so the counter is
+		// left higher than it should be. Restoring it keeps an interpreter
+		// that survives an exit — the REPL, or a caller that catches this —
+		// honest about how deep it is.
+		in.ev.ResetCallDepth()
+		result, err = nil, &ExitError{Code: exit.Code}
+	}()
+
+	in.ev.In = in.In
+	in.ev.Args = in.Args
+
 	l := lexer.New(src)
 	p := parser.New(l)
 	program := p.ParseProgram()
@@ -86,7 +131,7 @@ func (in *Interpreter) Eval(src, filename string) (object.Object, error) {
 		return nil, &SyntaxError{Filename: filename, Problems: problems}
 	}
 
-	result := in.ev.Eval(program, in.Env)
+	result = in.ev.Eval(program, in.Env)
 	if errObj, ok := result.(*object.Error); ok {
 		return nil, &RuntimeError{Filename: filename, Pos: errObj.Pos, Message: errObj.Message}
 	}
@@ -144,33 +189,43 @@ func (in *Interpreter) RunREPL(r io.Reader) error {
 			continue
 		}
 
-		in.runOne(src)
+		// An `exit` ends the session, as typing quit would.
+		if err := in.runOne(src); err != nil {
+			return nil
+		}
 		pending.Reset()
 	}
 
 	// Report anything left over when input ended mid-statement.
 	if pending.Len() > 0 {
-		in.runOne(pending.String())
+		if err := in.runOne(pending.String()); err != nil {
+			return nil
+		}
 	}
 
 	return scanner.Err()
 }
 
-// runOne evaluates a single REPL entry and reports the outcome.
-func (in *Interpreter) runOne(src string) {
+// runOne evaluates a single REPL entry and reports the outcome. It returns an
+// error only for an `exit`, which ends the session rather than being printed.
+func (in *Interpreter) runOne(src string) error {
 	result, err := in.Eval(src, "<stdin>")
 	if err != nil {
+		if exit, ok := err.(*ExitError); ok {
+			return exit
+		}
 		fmt.Fprintln(in.Out, err.Error())
-		return
+		return nil
 	}
 
 	// Statements that produce nothing (a `let`, or `print`, which returns
 	// null) are not echoed, so that `print(1)` does not also print "null".
 	if result == nil || result.Type() == object.NULL {
-		return
+		return nil
 	}
 
 	fmt.Fprintln(in.Out, result.Inspect())
+	return nil
 }
 
 func (in *Interpreter) writePrompt(prompt string) {

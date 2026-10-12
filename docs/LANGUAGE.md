@@ -12,6 +12,7 @@ ccwig                       # interactive session
 ccwig -e 'print("hi");'     # run source from the command line
 ccwig -tokens -e '1 + 2;'   # show the token stream
 ccwig -ast -e '1 + 2 * 3;'  # show the parsed syntax tree
+ccwig tool.cw a b c         # a b c reach the program through args()
 ```
 
 A program is a sequence of statements. Statements are separated by
@@ -22,13 +23,17 @@ naturally.
 
 | Kind | Examples |
 | --- | --- |
-| Integer | `42`, `0`, `-7` |
+| Integer | `42`, `0`, `-7`, `0xff`, `0b1010`, `0o17` |
 | Float | `3.5`, `0.25` |
 | String | `"hello"`, `""` |
 | Boolean | `true`, `false` |
 | Null | `null` |
 | Identifier | `x`, `total`, `foo_bar1` |
 | Keywords | `let`, `fn`, `if`, `else`, `while`, `for`, `return`, `true`, `false`, `null` |
+
+An integer may be written in hexadecimal with `0x`, in binary with `0b`, or in
+octal with `0o`. A leading zero with no prefix stays decimal, so `010` is ten
+rather than C's octal eight; `0o10` is what asks for octal.
 
 Identifiers start with a letter or `_` and continue with letters, digits or
 `_`. Comments are `// to end of line` and `/* block comments */`, which do
@@ -70,14 +75,18 @@ From tightest to loosest binding:
 | --- | --- | --- |
 | 1 (tightest) | `xs[i]` | left |
 | 2 | `f(x)` | left |
-| 3 | `-x`, `!x` | right |
+| 3 | `-x`, `!x`, `~x` | right |
 | 4 | `*` `/` `%` | left |
 | 5 | `+` `-` | left |
-| 6 | `<` `>` `<=` `>=` | left |
-| 7 | `==` `!=` | left |
-| 8 | `&&` | left |
-| 9 | `\|\|` | left |
-| 10 (loosest) | `=` | right |
+| 6 | `<<` `>>` | left |
+| 7 | `<` `>` `<=` `>=` | left |
+| 8 | `==` `!=` | left |
+| 9 | `&` | left |
+| 10 | `^` | left |
+| 11 | `\|` | left |
+| 12 | `&&` | left |
+| 13 | `\|\|` | left |
+| 14 (loosest) | `=` | right |
 
 Notes:
 
@@ -96,6 +105,14 @@ Notes:
   `xs == xs` is true while `[1, 2] == [1, 2]` is false.
 - `&&` and `||` short-circuit and yield a boolean. A guard such as
   `i < len(xs) && xs[i] != null` is therefore safe.
+- `&` `|` `^` are bitwise and, or and exclusive or, and `~x` is the bitwise
+  complement. They are defined on `INTEGER` only: `1.0 & 2` is an error, as
+  `5.0 % 2` is.
+- `<<` and `>>` shift left and right. A right shift is arithmetic, so it
+  keeps the sign: `-8 >> 1` is `-4`. Shifting by a negative amount is an
+  error, and shifting by 64 or more is defined rather than undefined — zero
+  to the left, the sign to the right — which is the one thing C leaves open
+  that this language settles.
 
 ## Variables and scope
 
@@ -284,6 +301,201 @@ An array of a million elements is a reasonable thing to ask `fill` for. It
 allocates what it is asked for, so asking for far more than the machine has
 will fail as any large allocation fails rather than being caught and reported.
 
+## Strings
+
+A string is a sequence of characters, and it can be indexed and sliced by
+character rather than by byte:
+
+```c
+let s = "hello";
+print(s[0]);            // h
+print(s[4]);            // o
+print(s[5]);            // null — reading past the end is not an error
+print(len(s));          // 5
+print(substr(s, 1, 3)); // ell
+```
+
+Reading outside a string yields `null`, as it does for an array. Writing to a
+character does not exist — a string is immutable, so `s[0] = "H"` is an error
+rather than a silent partial write.
+
+Index and length count characters, so `"héllo"[1]` is `é` and
+`len("héllo")` is `5`. `split` and `find` count the same way, which is what
+lets `substr(s, find(s, "llo"))` mean what it looks like it means.
+
+An empty separator splits a string into its characters, which is the way to
+iterate over one:
+
+```c
+let chars = split("abc", "");   // ["a", "b", "c"]
+```
+
+## Input, arguments and files
+
+A program can see what it was pointed at. `args()` is the arguments that
+follow the file; `readLine` and `readAll` read standard input.
+
+```sh
+ccwig report.cw sales.csv summary.txt
+```
+
+```c
+let argv = args();          // ["sales.csv", "summary.txt"]
+let row = readLine();       // one line of standard input, or null at the end
+let whole = readAll();      // everything left on standard input
+```
+
+A file can be read and written whole:
+
+```c
+let text = readFile("input.txt");
+writeFile("output.txt", upper(text));
+```
+
+`readFile` on a missing file is an error, not `null`: a program that cannot
+find its input is broken, and saying so where the read happened is more
+useful than a `null` that travels a long way before something trips over it.
+
+`time()` is the number of milliseconds since the Unix epoch, which is the
+clock a program needs to time itself. `timeUs()` is the same clock in
+microseconds, for the things a millisecond is too coarse for — one socket
+send, one round trip, one builtin call. A program that times a hundred round
+trips with `time()` is measuring its clock as much as its loop:
+
+```c
+let started = timeUs();
+// ... the work ...
+print("took " + str(timeUs() - started) + " microseconds");
+```
+
+`exit(code)` stops the program with that status, which becomes the process
+status; the rest of the program does not run. `exit()` with no argument is
+`exit(0)`. A status outside 0–255 is refused rather than quietly truncated.
+
+Standard input is readable from a file or a pipeline, but not from the REPL:
+the session already owns standard input, and a `readLine` that stole the next
+line the user typed would be worse than one that says it cannot.
+
+## Networking
+
+A program can open real TCP connections. The shape is deliberately C's: a
+socket is an integer descriptor, a call that fails returns `-1` or `null`, and
+`net_error()` holds the reason.
+
+```c
+let listener = net_listen(8080);
+if listener < 0 {
+    print("cannot listen: " + net_error());
+    exit(1);
+}
+
+let conn = net_accept(listener);      // blocks until a client arrives
+if conn < 0 {
+    print("cannot accept: " + net_error());
+    exit(1);
+}
+
+let line = net_recvline(conn);        // a line, without its newline
+while line != null {
+    net_send(conn, upper(line) + "\n");
+    line = net_recvline(conn);
+}
+
+net_close(conn);
+net_close(listener);
+```
+
+A client is the same calls in a different order:
+
+```c
+let fd = net_connect("example.com", 80);
+net_send(fd, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
+let line = net_recvline(fd);
+while line != null {
+    print(line);
+    line = net_recvline(fd);
+}
+net_close(fd);
+```
+
+Descriptors start at 3, because 0, 1 and 2 are standard input, output and
+error, and a C programmer reading this code assumes exactly that. A descriptor
+is never reused within a run, which costs nothing and removes every
+stale-descriptor bug.
+
+The split between an error and a value is deliberate. Passing a string where a
+port belongs is a mistake in the program, so it is an error that stops the
+program, as everywhere else. A refused connection or a closed port is
+something a working program expects, so it comes back as `-1` (or `null`), and
+`if fd < 0` reads the same here as it does in C. A server can therefore refuse
+one connection and carry on serving.
+
+`net_recvline` and `net_recv` return `null` at the end of the stream *and* on
+failure, because there are only so many ways to say nothing; `net_error()`
+tells the two apart for a caller that cares, and most callers only care that
+the data stopped.
+
+A socket starts with no deadline, so a `net_accept` or `net_recv` waits as long
+as it takes. `net_settimeout(fd, ms)` gives the socket one `ms` milliseconds
+from now, and `net_settimeout(fd, 0)` removes it. This is what keeps a server
+from hanging on a client that went away, and a benchmark from running forever.
+
+A deadline is an instant, not an interval, and it stays where it was put. A
+socket given a 2 millisecond deadline and read two seconds later does not wait
+two more milliseconds; the deadline has passed and the read gives up at once. A
+loop that polls therefore sets the deadline again before every call.
+
+`net_timedout()` is `true` when the last failure was a deadline passing. This is
+the question a server polling several clients has to ask after every empty read,
+and it is a different question from `net_error()`: "nothing has arrived yet" is
+not an error at all, and the socket is still good. Without it, telling a quiet
+client from a departed one means matching on the text of a message that belongs
+to the operating system, which is not a thing a language should make its
+programs do.
+
+```c
+// One thread, many clients: ask each of them, and let them all say no.
+net_settimeout(listener, 2);
+let conn = net_accept(listener);
+
+while running {
+    if conn >= 0 && count < MAX_CLIENTS {
+        fds[count] = conn;
+        count = count + 1;
+    } else if net_timedout() == false {
+        print("cannot accept: " + net_error());
+        running = false;
+    }
+
+    let i = 0;
+    while i < count {
+        net_settimeout(fds[i], 2);
+        let line = net_recvline(fds[i]);
+
+        if line == null && net_timedout() {
+            i = i + 1;              // nothing yet; ask again later
+        } else if line == null {
+            drop(i);                // gone, and not because of the clock.
+                                    // The last client moved into this slot,
+                                    // so i must not advance.
+        } else {
+            sayAll(line);
+            i = i + 1;
+        }
+    }
+
+    net_settimeout(listener, 2);
+    conn = net_accept(listener);
+}
+```
+
+`examples/net/chat-server.cw` is that loop with the details filled in.
+
+Connections block the interpreter the way a one-client-at-a-time C server
+blocks: there are no threads, no callbacks, and nothing hidden. A program that
+serves two clients at once accepts one, serves it, and accepts the next - or
+polls, as above, which is what `select()` does in C.
+
 ## Built-in functions
 
 | Call | Result |
@@ -297,6 +509,33 @@ will fail as any large allocation fails rather than being caught and reported.
 | `rest(xs)` | A new array without the first element, or `null` if empty. |
 | `type(v)` | The name of `v`'s type, as a string. |
 | `str(v)` | `v` rendered as a string. |
+| `ord(s)` | The code point of the first character. An empty string is an error. |
+| `chr(n)` | The one-character string for a code point. |
+| `substr(s, start)` / `substr(s, start, n)` | A slice of `s`, by character. Both forms clamp rather than fail. |
+| `split(s, sep)` | An array of the pieces of `s`; an empty `sep` splits into characters. |
+| `join(xs, sep)` | The elements of `xs` rendered with `str` and joined by `sep`. |
+| `find(s, sub)` | The character index of the first `sub`, or `-1`. |
+| `upper(s)` / `lower(s)` | Case conversion. |
+| `args()` | The program's arguments as an array of strings. |
+| `readLine()` | The next line of standard input without its terminator, or `null` at the end. |
+| `readAll()` | Everything left on standard input. |
+| `readFile(path)` | The whole file as a string. Missing files are an error. |
+| `writeFile(path, s)` | Writes `s` to `path`. Returns `null`. |
+| `exists(path)` | Whether there is anything at that path. |
+| `time()` | Milliseconds since the Unix epoch. |
+| `timeUs()` | The same clock in microseconds, for timing something shorter than a millisecond. |
+| `exit(code)` | Stops the program with that status. |
+| `net_listen(port)` | A listening descriptor, or `-1`. Port 0 asks for a free one. |
+| `net_accept(fd)` | A descriptor for the next connection, or `-1`. Blocks. |
+| `net_connect(host, port)` | A connected descriptor, or `-1`. |
+| `net_send(fd, s)` | Sends all of `s`; the number of bytes written, or `-1`. |
+| `net_recv(fd, max)` | Up to `max` bytes as a string, or `null` at the end or on failure. |
+| `net_recvline(fd)` | One line without its newline, or `null` at the end or on failure. |
+| `net_close(fd)` | Releases the descriptor. Returns `null`. |
+| `net_settimeout(fd, ms)` | A deadline `ms` ahead; 0 removes it. Returns `null`. |
+| `net_addr(fd)` | The address of the socket, as `host:port`. |
+| `net_error()` | The reason the last socket call failed, or `""`. |
+| `net_timedout()` | Whether the last failure was a deadline passing. |
 | `clear()` | Erases the screen and moves the cursor home. Returns `null`. |
 | `sleep(ms)` | Waits `ms` milliseconds. Returns `null`. |
 
@@ -429,12 +668,16 @@ expressionStmt = expression ";" ;
 expression     = assignment ;
 assignment     = IDENT | index "=" assignment | logicOr ;
 logicOr        = logicAnd { "||" logicAnd } ;
-logicAnd       = equality { "&&" equality } ;
+logicAnd       = bitOr { "&&" bitOr } ;
+bitOr          = bitXor { "|" bitXor } ;
+bitXor         = bitAnd { "^" bitAnd } ;
+bitAnd         = equality { "&" equality } ;
 equality       = comparison { ( "==" | "!=" ) comparison } ;
-comparison     = sum { ( "<" | ">" | "<=" | ">=" ) sum } ;
+comparison     = shift { ( "<" | ">" | "<=" | ">=" ) shift } ;
+shift          = sum { ( "<<" | ">>" ) sum } ;
 sum            = product { ( "+" | "-" ) product } ;
 product        = prefix { ( "*" | "/" | "%" ) prefix } ;
-prefix         = ( "-" | "!" ) prefix | call ;
+prefix         = ( "-" | "!" | "~" ) prefix | call ;
 call           = index { "(" [ arguments ] ")" } ;
 index          = primary { "[" expression "]" } ;
 primary        = INT | FLOAT | STRING | "true" | "false" | "null"

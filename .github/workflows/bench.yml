@@ -1,0 +1,90 @@
+name: Benchmark
+
+# Measures the loopback network benchmark on a machine that is not the one it
+# was written on, and publishes the result. The numbers are about the machine
+# as much as about the language, so the machine goes in the report, and a
+# report made on a shared CI runner is worth exactly what it says it is: a
+# second opinion from somewhere else.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      note:
+        description: A line to record in the report
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two benchmarks at once would each be measuring a machine the other is
+  # busy on, which is not a measurement.
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure and write the reports
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    env:
+      NOTE: ${{ inputs.note }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build the interpreter
+        run: make build
+
+      - name: Run the benchmark
+        run: |
+          mkdir -p reports
+          note="GitHub Actions, ubuntu-latest"
+          if [ -n "$NOTE" ]; then
+            note="$note - $NOTE"
+          fi
+
+          go run ./cmd/netbench \
+            -out reports \
+            -ccwig bin/ccwig \
+            -reps 5 \
+            -commit "$(git rev-parse --short HEAD)" \
+            -note "$note"
+
+      - name: Show the report
+        run: cat reports/netbench.md
+
+      - name: Keep the reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbench-reports
+          path: reports/
+          # The Markdown is what is read, the CSV is the data behind it, and
+          # the page is what gets published.
+          retention-days: 90
+
+      - name: Stage the page
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports/
+
+      - name: Publish
+        id: deploy
+        uses: actions/deploy-pages@v4

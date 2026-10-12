@@ -2,6 +2,8 @@ package ccwig_test
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,8 +14,61 @@ import (
 	"github.com/UtkarshDeoli/ccwig/internal/interp"
 )
 
-// runFile executes an example program and returns its output.
+// exampleDirs are the directories under examples/ that hold programs checked
+// against recorded output. The animated and very large examples are elsewhere
+// because they are checked for what they do rather than for what they print,
+// and the error examples are checked for the error they produce.
+var exampleDirs = []string{"examples", "examples/real", "examples/systems"}
+
+// examplePrograms lists every program that has a recorded output file.
+func examplePrograms(t *testing.T) []string {
+	t.Helper()
+
+	var sources []string
+	for _, dir := range exampleDirs {
+		found, err := filepath.Glob(filepath.Join(dir, "*.cw"))
+		if err != nil {
+			t.Fatalf("glob failed for %s: %v", dir, err)
+		}
+		sources = append(sources, found...)
+	}
+
+	if len(sources) == 0 {
+		t.Fatal("no example programs found; expected files under examples/")
+	}
+	return sources
+}
+
+// runFile executes an example program with the arguments and input its
+// directory gives it, and returns its output.
+//
+// A program is given what it needs by the files beside it: `wc.args` holds one
+// command-line argument per line, and `wc.in` is its standard input. That
+// keeps an example that reads a file or a pipeline runnable by a reader
+// without the test having to know anything about it.
 func runFile(t *testing.T, path string) string {
+	t.Helper()
+
+	output, status := runExample(t, path)
+	if status != 0 {
+		t.Fatalf("%s exited with status %d", path, status)
+	}
+	return output
+}
+
+// runExample runs an example with the arguments and input its directory gives
+// it, and returns its output and its exit status.
+func runExample(t *testing.T, path string) (string, int) {
+	t.Helper()
+
+	return runWith(t, path, readLines(t, argumentFile(path)), readInput(t, inputFile(path)))
+}
+
+// runWith runs an example with explicit arguments and input.
+//
+// A failure that is not an `exit` fails the test: only the deliberate ending
+// of a program is a status for the caller to deal with.
+func runWith(t *testing.T, path string, args []string, input io.Reader) (string, int) {
 	t.Helper()
 
 	src, err := os.ReadFile(path)
@@ -22,41 +77,99 @@ func runFile(t *testing.T, path string) string {
 	}
 
 	var out bytes.Buffer
-	if err := interp.New(&out).Run(string(src), path); err != nil {
-		t.Fatalf("%s failed: %v", path, err)
+	in := interp.New(&out)
+	in.Args = args
+	in.In = input
+
+	status := 0
+	if err := in.Run(string(src), path); err != nil {
+		var exit *interp.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("%s failed: %v", path, err)
+		}
+		status = exit.Code
 	}
 
-	return out.String()
+	return out.String(), status
+}
+
+// runWithInput runs an example with the given standard input and no arguments.
+func runWithInput(t *testing.T, path, input string) (string, int) {
+	t.Helper()
+
+	return runWith(t, path, nil, strings.NewReader(input))
+}
+
+// runWithArgsAndInput runs an example with both.
+func runWithArgsAndInput(t *testing.T, path string, args []string, input string) (string, int) {
+	t.Helper()
+
+	return runWith(t, path, args, strings.NewReader(input))
+}
+
+// argumentFile and inputFile name the files beside a program that hold its
+// command-line arguments and its standard input.
+func argumentFile(path string) string { return strings.TrimSuffix(path, ".cw") + ".args" }
+func inputFile(path string) string    { return strings.TrimSuffix(path, ".cw") + ".in" }
+
+// readInput returns the file's contents as standard input, or nil if there is
+// no such file. A nil reader is what a program sees when nothing is piped into
+// it, and is the ordinary case: most programs read no input.
+func readInput(t *testing.T, path string) io.Reader {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("could not read %s: %v", path, err)
+	}
+	return bytes.NewReader(data)
+}
+
+// readLines reads a file of one line per entry, or nil if there is no such
+// file. A missing file is the ordinary case: most programs take no arguments.
+func readLines(t *testing.T, path string) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("could not read %s: %v", path, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	return lines
 }
 
 // TestEveryExampleHasExpectedOutput keeps the example programs and their
 // expected output in step: adding a program without recording what it prints
 // fails here rather than silently going untested.
 func TestEveryExampleHasExpectedOutput(t *testing.T) {
-	sources, err := filepath.Glob("examples/*.cw")
-	if err != nil {
-		t.Fatalf("glob failed: %v", err)
-	}
-	if len(sources) == 0 {
-		t.Fatal("no example programs found; expected files under examples/")
-	}
-
-	for _, src := range sources {
+	for _, src := range examplePrograms(t) {
 		want := strings.TrimSuffix(src, ".cw") + ".out"
 		if _, err := os.Stat(want); err != nil {
 			t.Errorf("%s has no expected-output file %s", src, want)
 		}
 	}
 
-	expected, err := filepath.Glob("examples/*.out")
-	if err != nil {
-		t.Fatalf("glob failed: %v", err)
-	}
+	for _, dir := range exampleDirs {
+		expected, err := filepath.Glob(filepath.Join(dir, "*.out"))
+		if err != nil {
+			t.Fatalf("glob failed for %s: %v", dir, err)
+		}
 
-	for _, want := range expected {
-		src := strings.TrimSuffix(want, ".out") + ".cw"
-		if _, err := os.Stat(src); err != nil {
-			t.Errorf("%s has no program file %s", want, src)
+		for _, want := range expected {
+			src := strings.TrimSuffix(want, ".out") + ".cw"
+			if _, err := os.Stat(src); err != nil {
+				t.Errorf("%s has no program file %s", want, src)
+			}
 		}
 	}
 }
@@ -64,13 +177,12 @@ func TestEveryExampleHasExpectedOutput(t *testing.T) {
 // TestExamples runs every example and compares its output with the recorded
 // expected output.
 func TestExamples(t *testing.T) {
-	sources, err := filepath.Glob("examples/*.cw")
-	if err != nil {
-		t.Fatalf("glob failed: %v", err)
-	}
-
-	for _, src := range sources {
+	for _, src := range examplePrograms(t) {
 		name := strings.TrimSuffix(filepath.Base(src), ".cw")
+		dir := filepath.Base(filepath.Dir(src))
+		if dir != "examples" {
+			name = dir + "/" + name
+		}
 
 		t.Run(name, func(t *testing.T) {
 			wantPath := strings.TrimSuffix(src, ".cw") + ".out"

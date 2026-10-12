@@ -8,6 +8,7 @@ package parser
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/UtkarshDeoli/ccwig/internal/ast"
 	"github.com/UtkarshDeoli/ccwig/internal/lexer"
@@ -15,38 +16,52 @@ import (
 )
 
 // Operator precedence levels, lowest binding first.
+//
+// The order matches C, which is the only defensible choice for a language with
+// a C accent: a reader who knows where `&` sits relative to `==` should not
+// have to learn this language's opinion instead. The bitwise operators sit
+// between `&&` and `==`, and the shifts between the comparisons and `+`.
 const (
 	_ int = iota
 	precLowest
 	precAssign     // =
 	precOr         // ||
 	precAnd        // &&
+	precBitOr      // |
+	precBitXor     // ^
+	precBitAnd     // &
 	precEquals     // == !=
 	precComparison // < > <= >=
+	precShift      // << >>
 	precSum        // + -
 	precProduct    // * / %
-	precPrefix     // -x !x
+	precPrefix     // -x !x ~x
 	precCall       // f(x)
 	precIndex      // a[i]
 )
 
 var precedences = map[token.Type]int{
-	token.ASSIGN:   precAssign,
-	token.OR:       precOr,
-	token.AND:      precAnd,
-	token.EQ:       precEquals,
-	token.NE:       precEquals,
-	token.LT:       precComparison,
-	token.GT:       precComparison,
-	token.LE:       precComparison,
-	token.GE:       precComparison,
-	token.PLUS:     precSum,
-	token.MINUS:    precSum,
-	token.ASTERISK: precProduct,
-	token.SLASH:    precProduct,
-	token.PERCENT:  precProduct,
-	token.LPAREN:   precCall,
-	token.LBRACKET: precIndex,
+	token.ASSIGN:    precAssign,
+	token.OR:        precOr,
+	token.AND:       precAnd,
+	token.PIPE:      precBitOr,
+	token.CARET:     precBitXor,
+	token.AMPERSAND: precBitAnd,
+	token.EQ:        precEquals,
+	token.NE:        precEquals,
+	token.LT:        precComparison,
+	token.GT:        precComparison,
+	token.LE:        precComparison,
+	token.GE:        precComparison,
+	token.SHL:       precShift,
+	token.SHR:       precShift,
+	token.PLUS:      precSum,
+	token.MINUS:     precSum,
+	token.ASTERISK:  precProduct,
+	token.SLASH:     precProduct,
+	token.PERCENT:   precProduct,
+	token.LPAREN:    precCall,
+	token.LBRACKET:  precIndex,
 }
 
 // MaxNestingDepth bounds how deeply expressions may nest.
@@ -505,7 +520,7 @@ func (p *Parser) prefixParseFn(t token.Type) func() ast.Expression {
 		return p.parseBooleanLiteral
 	case token.NULL:
 		return p.parseNullLiteral
-	case token.BANG, token.MINUS:
+	case token.BANG, token.MINUS, token.TILDE:
 		return p.parsePrefixExpression
 	case token.LPAREN:
 		return p.parseGroupedExpression
@@ -524,7 +539,8 @@ func (p *Parser) infixParseFn(t token.Type) func(ast.Expression) ast.Expression 
 	switch t {
 	case token.PLUS, token.MINUS, token.ASTERISK, token.SLASH, token.PERCENT,
 		token.EQ, token.NE, token.LT, token.GT, token.LE, token.GE,
-		token.AND, token.OR:
+		token.AND, token.OR,
+		token.AMPERSAND, token.PIPE, token.CARET, token.SHL, token.SHR:
 		return p.parseInfixExpression
 	case token.LPAREN:
 		return p.parseCallExpression
@@ -544,14 +560,37 @@ func (p *Parser) parseIdentifier() ast.Expression {
 func (p *Parser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
-	var value int64
-	if _, err := fmt.Sscanf(p.curToken.Literal, "%d", &value); err != nil {
+	value, err := parseInteger(p.curToken.Literal)
+	if err != nil {
 		p.addError(p.curToken.Pos, "could not parse %q as an integer", p.curToken.Literal)
 		return nil
 	}
 	lit.Value = value
 
 	return lit
+}
+
+// parseInteger gives an integer literal its value, honouring the 0x, 0b and 0o
+// radix prefixes the lexer recognises.
+//
+// A leading zero with no prefix stays decimal, so `010` is ten. C would read it
+// as octal eight, and that rule is a well-known way to lose an afternoon; the
+// explicit `0o` is what asks for octal here.
+func parseInteger(literal string) (int64, error) {
+	base, digits := 10, literal
+
+	if len(literal) > 1 && literal[0] == '0' {
+		switch literal[1] {
+		case 'x', 'X':
+			base, digits = 16, literal[2:]
+		case 'b', 'B':
+			base, digits = 2, literal[2:]
+		case 'o', 'O':
+			base, digits = 8, literal[2:]
+		}
+	}
+
+	return strconv.ParseInt(digits, base, 64)
 }
 
 func (p *Parser) parseFloatLiteral() ast.Expression {

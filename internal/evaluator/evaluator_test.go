@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -628,7 +629,8 @@ func TestIndexReadsOutOfRangeYieldNull(t *testing.T) {
 func TestIndexErrors(t *testing.T) {
 	assertError(t, eval(t, `[1, 2, 3]["a"]`), "index must be an integer, got STRING")
 	assertError(t, eval(t, "5[0]"), "index operator not supported: INTEGER")
-	assertError(t, eval(t, `"abc"[0]`), "index operator not supported: STRING")
+	assertError(t, eval(t, `"abc"["a"]`), "index must be an integer, got STRING")
+	assertError(t, eval(t, `let s = "abc"; s[0] = "z";`), "strings are immutable")
 	assertError(t, eval(t, "let xs = [1]; xs[5] = 1;"), "index out of range: 5 (array length 1)")
 	assertError(t, eval(t, "let xs = [1]; xs[-1] = 1;"), "index out of range: -1 (array length 1)")
 }
@@ -1535,4 +1537,365 @@ func TestEqualityIsTotalSymmetricAndReflexive(t *testing.T) {
 			}
 		}
 	})
+}
+
+// --------------------------------------------------------------- bitwise
+
+func TestBitwiseOperators(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"6 & 3", 2},
+		{"6 | 3", 7},
+		{"6 ^ 3", 5},
+		{"1 << 4", 16},
+		{"256 >> 4", 16},
+		{"~0", -1},
+		{"~5", -6},
+		{"0xff & 0x0f", 15},
+		{"0b1010 | 0b0101", 15},
+		{"0o17", 15},
+		{"~1 & 3", 2},
+
+		// A shift at or beyond the operand width is defined rather than
+		// undefined: zero to the left, the sign to the right.
+		{"1 << 64", 0},
+		{"-1 >> 64", -1},
+		{"-1 >> 1", -1},
+		{"-8 >> 1", -4},
+
+		// Precedence, in C's order.
+		{"1 << 4 | 0x0f", 31},
+		{"1 | 2 & 3", 3},
+		{"1 ^ 3 & 1", 0},
+		{"2 + 3 << 1", 10},
+	}
+
+	for _, tt := range tests {
+		assertInteger(t, eval(t, tt.input), tt.want)
+	}
+}
+
+func TestBitwiseOperatorsRejectNonIntegers(t *testing.T) {
+	assertError(t, eval(t, "1.0 & 2"), "unknown operator")
+	assertError(t, eval(t, "1 & 2.0"), "unknown operator")
+	assertError(t, eval(t, `"a" & "b"`), "unknown operator")
+	assertError(t, eval(t, "~1.5"), "unknown operator: ~FLOAT")
+	assertError(t, eval(t, "~\"a\""), "unknown operator: ~STRING")
+}
+
+func TestShiftByNegativeAmountIsAnError(t *testing.T) {
+	assertError(t, eval(t, "1 << -1"), "shift by a negative amount")
+	assertError(t, eval(t, "1 >> -1"), "shift by a negative amount")
+}
+
+// ---------------------------------------------------------------- strings
+
+func TestStringIndexing(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"hello"[0]`, "h"},
+		{`"hello"[4]`, "o"},
+		{`"hello"[5]`, "null"}, // out of range reads as null, like an array
+		{`"hello"[-1]`, "null"},
+		{`""[0]`, "null"},
+		{`let s = "hi"; s[0] + s[1]`, "hi"},
+		{`"héllo"[1]`, "é"}, // counted in characters, not bytes
+		{`"héllo"[4]`, "o"},
+		{`len("héllo")`, "5"},
+	}
+
+	for _, tt := range tests {
+		assertInspect(t, eval(t, tt.input), tt.want)
+	}
+}
+
+func TestOrdAndChr(t *testing.T) {
+	assertInteger(t, eval(t, `ord("A")`), 65)
+	assertInteger(t, eval(t, `ord("0")`), 48)
+	assertInteger(t, eval(t, `ord("é")`), 233)
+	assertInspect(t, eval(t, `chr(97)`), "a")
+	assertInspect(t, eval(t, `chr(233)`), "é")
+
+	// The pair round-trips, which is the property that makes them useful.
+	assertInspect(t, eval(t, `chr(ord("Z"))`), "Z")
+
+	assertError(t, eval(t, `ord("")`), "must not be empty")
+	assertError(t, eval(t, `ord(1)`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `chr(-1)`), "not a valid code point")
+	assertError(t, eval(t, `chr(1114112)`), "not a valid code point")
+	assertError(t, eval(t, `chr(55296)`), "surrogate")
+	assertError(t, eval(t, `chr("a")`), "must be an integer, got STRING")
+}
+
+func TestSubstrClamps(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`substr("hello world", 6)`, "world"},
+		{`substr("hello", 0, 3)`, "hel"},
+		{`substr("hello", 1, 3)`, "ell"},
+		{`substr("hello", 2, 99)`, "llo"}, // long enough clamps to the end
+		{`substr("hello", 99)`, ""},       // past the end is empty, not an error
+		{`substr("hello", -5, 2)`, "he"},  // negative start clamps to zero
+		{`substr("hello", 2, -1)`, ""},    // negative length clamps to none
+		{`substr("héllo", 1, 3)`, "éll"},
+		{`substr("", 0)`, ""},
+	}
+
+	for _, tt := range tests {
+		assertInspect(t, eval(t, tt.input), tt.want)
+	}
+
+	assertError(t, eval(t, `substr("a")`), "want 2 or 3, got 1")
+	assertError(t, eval(t, `substr(1, 0)`), "first argument to `substr` must be a string")
+}
+
+func TestSplitAndJoin(t *testing.T) {
+	assertInspect(t, eval(t, `split("a,b,c", ",")`), "[a, b, c]")
+	assertInspect(t, eval(t, `split("a-b-c", "-")`), "[a, b, c]")
+	assertInspect(t, eval(t, `split("abc", "")`), "[a, b, c]")
+	assertInspect(t, eval(t, `split("abc", "x")`), "[abc]")
+	assertInspect(t, eval(t, `split("", ",")`), "[]")
+	assertInspect(t, eval(t, `split("a,b,", ",")`), "[a, b, ]")
+
+	assertInspect(t, eval(t, `join(["a", "b"], "-")`), "a-b")
+	assertInspect(t, eval(t, `join([1, 2, 3], ", ")`), "1, 2, 3")
+	assertInspect(t, eval(t, `join([], "-")`), "")
+
+	// Split and join undo each other.
+	assertInspect(t, eval(t, `join(split("a,b,c", ","), ",")`), "a,b,c")
+
+	assertError(t, eval(t, `split(1, ",")`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `join("a", ",")`), "must be an array, got STRING")
+}
+
+func TestFindCountsCharacters(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{`find("hello", "ll")`, 2},
+		{`find("hello", "h")`, 0},
+		{`find("hello", "z")`, -1},
+		{`find("hello", "")`, 0},
+		{`find("héllo", "llo")`, 2}, // the index is in characters, so it suits substr
+	}
+
+	for _, tt := range tests {
+		assertInteger(t, eval(t, tt.input), tt.want)
+	}
+
+	// The index can be handed straight to substr, which is the point.
+	assertInspect(t, eval(t, `substr("héllo", find("héllo", "llo"))`), "llo")
+}
+
+func TestCaseConversion(t *testing.T) {
+	assertInspect(t, eval(t, `upper("hello")`), "HELLO")
+	assertInspect(t, eval(t, `lower("HELLO")`), "hello")
+	assertInspect(t, eval(t, `upper("MiXeD 123")`), "MIXED 123")
+	assertError(t, eval(t, `upper(1)`), "must be a string, got INTEGER")
+}
+
+// ------------------------------------------------------- input, args, exit
+
+// evalInput evaluates input with the given standard input and program
+// arguments, and returns everything written by `print`.
+func evalInput(t *testing.T, src, stdin string, progArgs []string) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	ev := New(&buf)
+	ev.In = strings.NewReader(stdin)
+	ev.Args = progArgs
+
+	evalWith(t, src, ev)
+
+	return buf.String()
+}
+
+func TestArgsBuiltin(t *testing.T) {
+	assertInspect(t, evalWith(t, "args()", newTestEvaluator(t, "", []string{"a", "b"})), "[a, b]")
+	assertInspect(t, evalWith(t, "args()", newTestEvaluator(t, "", nil)), "[]")
+	assertInteger(t, evalWith(t, "len(args())", newTestEvaluator(t, "", []string{"x", "y", "z"})), 3)
+	assertError(t, eval(t, "args(1)"), "wrong number of arguments to `args`")
+}
+
+// newTestEvaluator builds an evaluator with input and arguments but no output
+// of interest, for the assertions that only need a value back.
+func newTestEvaluator(t *testing.T, stdin string, progArgs []string) *Evaluator {
+	t.Helper()
+
+	ev := New(io.Discard)
+	ev.In = strings.NewReader(stdin)
+	ev.Args = progArgs
+	return ev
+}
+
+func TestReadLineAndReadAll(t *testing.T) {
+	src := "print(readLine()); print(readLine()); print(readLine());"
+	if got := evalInput(t, src, "one\ntwo\n", nil); got != "one\ntwo\nnull\n" {
+		t.Errorf("expected two lines then null, got %q", got)
+	}
+
+	// The last line need not end with a newline.
+	if got := evalInput(t, "print(readLine());", "no-newline", nil); got != "no-newline\n" {
+		t.Errorf("expected a final unterminated line to be read, got %q", got)
+	}
+
+	// A carriage return before the newline is not part of the line.
+	if got := evalInput(t, "print(readLine());", "crlf\r\n", nil); got != "crlf\n" {
+		t.Errorf("expected the carriage return to be dropped, got %q", got)
+	}
+
+	if got := evalInput(t, "print(readAll());", "a\nb\n", nil); got != "a\nb\n\n" {
+		t.Errorf("expected the whole input, got %q", got)
+	}
+
+	// The two share one position on the input.
+	src = "print(readLine()); print(readAll());"
+	if got := evalInput(t, src, "first\nrest\n", nil); got != "first\nrest\n\n" {
+		t.Errorf("expected readAll to continue where readLine stopped, got %q", got)
+	}
+}
+
+func TestReadingWithoutStandardInputIsAnError(t *testing.T) {
+	assertError(t, eval(t, "readLine()"), "no standard input available")
+	assertError(t, eval(t, "readAll()"), "no standard input available")
+}
+
+func TestReadAndWriteFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "note.txt")
+
+	evalWith(t, `writeFile("`+path+`", "hello\nfile");`, New(io.Discard))
+	assertInspect(t, eval(t, `readFile("`+path+`")`), "hello\nfile")
+
+	assertError(t, eval(t, `readFile("`+path+`.missing")`), "cannot read")
+	assertError(t, eval(t, `readFile(1)`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `writeFile("`+path+`", 1)`), "must be a string, got INTEGER")
+}
+
+// TestExistsAsksWhetherAFileIsThere is the question a program whose file is
+// allowed to be missing has to ask, because reading one that is not there is
+// an error with nothing to catch it.
+func TestExistsAsksWhetherAFileIsThere(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+
+	assertInspect(t, eval(t, `exists("`+path+`")`), "false")
+
+	evalWith(t, `writeFile("`+path+`", "here");`, New(io.Discard))
+
+	assertInspect(t, eval(t, `exists("`+path+`")`), "true")
+
+	// A directory is something that is there. Whether it can be read is a
+	// different question, and `readFile` still answers that one by failing.
+	assertInspect(t, eval(t, `exists("`+dir+`")`), "true")
+
+	assertError(t, eval(t, `exists(1)`), "must be a string, got INTEGER")
+	assertError(t, eval(t, `exists()`), "wrong number of arguments")
+}
+
+func TestTimeReturnsMilliseconds(t *testing.T) {
+	before := time.Now().UnixMilli()
+	got := eval(t, "time()")
+
+	after := time.Now().UnixMilli()
+
+	value, ok := got.(*object.Integer)
+	if !ok {
+		t.Fatalf("expected an integer, got %T (%s)", got, got.Inspect())
+	}
+	if value.Value < before || value.Value > after {
+		t.Errorf("expected a time between %d and %d, got %d", before, after, value.Value)
+	}
+}
+
+// TestTimeUsIsTheSameClockInMicroseconds checks the two clocks agree about
+// what time it is, because a second clock that drifted from the first would be
+// a second clock a program could not use beside it.
+func TestTimeUsIsTheSameClockInMicroseconds(t *testing.T) {
+	before := time.Now().UnixMicro()
+
+	gotValue := eval(t, "timeUs()")
+	gotMS := eval(t, "time()")
+
+	after := time.Now().UnixMicro()
+
+	got, ok := gotValue.(*object.Integer)
+	if !ok {
+		t.Fatalf("expected an integer, got %T (%s)", gotValue, gotValue.Inspect())
+	}
+	if got.Value < before || got.Value > after {
+		t.Errorf("expected a time between %d and %d, got %d", before, after, got.Value)
+	}
+
+	ms, ok := gotMS.(*object.Integer)
+	if !ok {
+		t.Fatalf("expected an integer, got %T (%s)", gotMS, gotMS.Inspect())
+	}
+
+	// The two reads are a microsecond or two apart at most, so a millisecond
+	// of disagreement would mean one of them was not the clock.
+	if diff := got.Value/1000 - ms.Value; diff < -1 || diff > 1 {
+		t.Errorf("timeUs()/1000 is %d and time() is %d, which is not the same clock", got.Value/1000, ms.Value)
+	}
+
+	assertError(t, eval(t, "timeUs(1)"), "wrong number of arguments")
+}
+
+func TestExitPanicsWithItsCode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"exit()", 0},
+		{"exit(0)", 0},
+		{"exit(7)", 7},
+		{"exit(255)", 255},
+		{"fn f() { exit(3); } f();", 3}, // unwinds through a call
+	}
+
+	for _, tt := range tests {
+		got := recoverExit(t, tt.input)
+		if got == nil {
+			t.Fatalf("input %q: expected an exit panic, got none", tt.input)
+		}
+		if got.Code != tt.want {
+			t.Errorf("input %q: expected code %d, got %d", tt.input, tt.want, got.Code)
+		}
+	}
+}
+
+func TestExitRejectsBadCodes(t *testing.T) {
+	assertError(t, eval(t, "exit(-1)"), "must be between 0 and 255")
+	assertError(t, eval(t, "exit(256)"), "must be between 0 and 255")
+	assertError(t, eval(t, `exit("x")`), "must be an integer, got STRING")
+	assertError(t, eval(t, "exit(1, 2)"), "want at most 1")
+}
+
+// recoverExit evaluates input and returns the ExitError it panicked with, or
+// nil if it did not panic.
+func recoverExit(t *testing.T, input string) *ExitError {
+	t.Helper()
+
+	var caught *ExitError
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				exit, ok := r.(ExitError)
+				if !ok {
+					t.Fatalf("expected an ExitError panic, got %T (%v)", r, r)
+				}
+				caught = &exit
+			}
+		}()
+		eval(t, input)
+	}()
+
+	return caught
 }

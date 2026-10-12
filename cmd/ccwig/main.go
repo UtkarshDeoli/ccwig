@@ -72,32 +72,28 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	rest := fs.Args()
-	if sourceSet && len(rest) > 0 {
-		fmt.Fprintln(stderr, "ccwig: give either -e or a file to run, not both")
-		return exitUsage
-	}
-	if len(rest) > 1 {
-		fmt.Fprintf(stderr, "ccwig: expected at most one file, got %d\n", len(rest))
-		return exitUsage
-	}
 
-	// Decide what to run: -e, a file, or the REPL.
+	// Decide what to run: -e, a file, or the REPL. Anything after the file
+	// (or after -e) belongs to the program, and `args()` hands it over.
 	var (
-		src      string
-		filename string
-		interact bool
+		src         string
+		filename    string
+		programArgs []string
+		interact    bool
 	)
 
 	switch {
 	case sourceSet:
 		src, filename = *source, "<command line>"
-	case len(rest) == 1:
+		programArgs = rest
+	case len(rest) >= 1:
 		contents, err := os.ReadFile(rest[0])
 		if err != nil {
 			fmt.Fprintf(stderr, "ccwig: %v\n", err)
 			return exitError
 		}
 		src, filename = string(contents), rest[0]
+		programArgs = rest[1:]
 	default:
 		interact = true
 	}
@@ -112,6 +108,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	in := interp.New(stdout)
 
 	if interact {
+		// The REPL owns standard input, so the program it is running cannot
+		// have it: In is left nil and `readLine` says so rather than stealing
+		// the next line the user types.
 		if err := in.RunREPL(stdin); err != nil {
 			fmt.Fprintf(stderr, "ccwig: %v\n", err)
 			return exitError
@@ -119,7 +118,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
+	in.In = stdin
+	in.Args = programArgs
+
 	if err := in.Run(src, filename); err != nil {
+		// An `exit` is not a failure: it becomes the process status, and
+		// nothing is printed.
+		var exit *interp.ExitError
+		if errors.As(err, &exit) {
+			return exit.Code
+		}
 		fmt.Fprintf(stderr, "%v\n", err)
 		return exitError
 	}
@@ -179,6 +187,8 @@ Usage:
   ccwig [options] [file]
 
 With no file and no -e, ccwig starts an interactive session.
+
+Anything after the file is passed to the program, which reads it with args().
 
 Options:
   -e source    evaluate source instead of reading a file

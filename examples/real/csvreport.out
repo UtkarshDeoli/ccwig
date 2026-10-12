@@ -1,0 +1,9 @@
+region       units    revenue
+-----------  -------  ---------
+west            44       2010
+south           42       1753
+north           40       1710
+east            18        760
+-----------  -------  ---------
+total          144       6233
+skipped 1 unreadable row(s)

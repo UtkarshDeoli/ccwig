@@ -1,0 +1,115 @@
+--- factorial of five ---
+
+     0  push 5
+     1  store 0
+     2  push 1
+     3  store 1
+     4  load 0
+     5  jz 15
+     6  load 1
+     7  load 0
+     8  mul
+     9  store 1
+    10  load 0
+    11  push 1
+    12  sub
+    13  store 0
+    14  jmp 4
+    15  load 1
+    16  halt
+
+   step   1  push 5  ->  [5]
+   step   2  store 0  ->  []
+   step   3  push 1  ->  [1]
+   step   4  store 1  ->  []
+   step   5  load 0  ->  [5]
+   step   6  jz 15  ->  []
+   step   7  load 1  ->  [1]
+   step   8  load 0  ->  [1 5]
+   step   9  mul  ->  [5]
+   step  10  store 1  ->  []
+   step  11  load 0  ->  [5]
+   step  12  push 1  ->  [5 1]
+   step  13  sub  ->  [4]
+   step  14  store 0  ->  []
+   step  15  jmp 4  ->  []
+   step  16  load 0  ->  [4]
+
+   result 120 after 63 steps
+
+--- the tenth fibonacci number ---
+
+     0  push 0
+     1  store 0
+     2  push 1
+     3  store 1
+     4  push 10
+     5  store 2
+     6  load 2
+     7  jz 21
+     8  load 0
+     9  load 1
+    10  add
+    11  store 3
+    12  load 1
+    13  store 0
+    14  load 3
+    15  store 1
+    16  load 2
+    17  push 1
+    18  sub
+    19  store 2
+    20  jmp 6
+    21  load 0
+    22  halt
+
+
+   result 55 after 160 steps
+
+--- the sum of one to a hundred ---
+
+     0  push 0
+     1  store 0
+     2  push 100
+     3  store 1
+     4  load 1
+     5  jz 15
+     6  load 0
+     7  load 1
+     8  add
+     9  store 0
+    10  load 1
+    11  push 1
+    12  sub
+    13  store 1
+    14  jmp 4
+    15  load 0
+    16  halt
+
+
+   result 5050 after 1108 steps
+
+--- the greatest common divisor of 1071 and 462 ---
+
+     0  push 1071
+     1  store 0
+     2  push 462
+     3  store 1
+     4  load 1
+     5  jz 15
+     6  load 0
+     7  load 1
+     8  mod
+     9  store 2
+    10  load 1
+    11  store 0
+    12  load 2
+    13  store 1
+    14  jmp 4
+    15  load 0
+    16  halt
+
+
+   result 21 after 41 steps
+
+check: ok - the machine's four answers are the four the same computations give without it

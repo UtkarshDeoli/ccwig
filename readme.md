@@ -4,8 +4,9 @@ CCWIG is a small programming language with a C accent, and this repository is
 the whole of it: a hand-written lexer, a recursive-descent parser and a
 tree-walking evaluator, with a command-line interface and a REPL on top.
 
-It is about 3,500 lines of Go behind 4,700 lines of tests, and it has no
-dependencies at all — the module imports nothing beyond the standard library.
+It is about 7,000 lines of Go behind 8,300 lines of tests — every line, comments
+and blanks included, which is what `wc -l` says — and it has no dependencies at
+all: the module imports nothing beyond the standard library.
 
 **On the name.** CCWIG stands for "C-like Compiler Written in Go", but what is
 here is an *interpreter*: the syntax tree is walked directly, and there is no
@@ -28,6 +29,9 @@ make build
 ./bin/ccwig examples/fizzbuzz.cw   # run a program
 ./bin/ccwig                        # interactive REPL
 ./bin/ccwig -e 'print(1 + 2);'     # run a one-liner
+
+./bin/ccwig apps/todo/todo.cw add buy milk   # a program that keeps a file
+./bin/ccwig apps/todo/todo.cw list
 ```
 
 Nothing needs installing and there is nothing to fetch. `go run ./cmd/ccwig`
@@ -100,6 +104,17 @@ kinds of C-style comment; and `clear` and `sleep`, which let a program redraw
 the terminal frame by frame. Strings are counted by character rather than by
 byte, so multi-byte text lands where it should.
 
+A program can also talk to the machine it is on. `args()` is the command line,
+`readLine()` and `readAll()` are standard input, `readFile`, `writeFile` and
+`exists` are the filesystem, `time()` and `timeUs()` are the clock in
+milliseconds and in microseconds, `exit(code)` is the exit status, and
+`net_listen`, `net_accept`, `net_connect`, `net_send` and `net_recv` are real
+TCP sockets with real file descriptors — numbered from 3 the way a C program
+numbers them, `-1` on failure, and `net_error()` for the reason. There are no
+threads, so a server watching several sockets gives each one a deadline with
+`net_settimeout` and polls, which is what `select()` does in C.
+[docs/LANGUAGE.md](docs/LANGUAGE.md#networking) covers that in full.
+
 Errors are meant to be readable rather than survivable. Syntax errors are all
 reported at once, with positions, and the program does not run. A failure while
 running stops at the first error and reports the file, line and column:
@@ -137,6 +152,55 @@ recursive backtracker, solves it twice — breadth first and depth first — dra
 both routes, and then checks in the language that each route really is a walk
 from the start to the exit.
 
+### Programs that do a job
+
+[`examples/real/`](examples/real/) is six programs of the kind you would
+actually reach for, each named on the command line the way the tool it imitates
+is, and each reading a file rather than a variable:
+
+| Program | What it shows |
+| --- | --- |
+| [`wc.cw`](examples/real/wc.cw) | Lines, words and characters in one pass, no lookahead |
+| [`head.cw`](examples/real/head.cw) | An argument that arrives as text and has to become a number |
+| [`grep.cw`](examples/real/grep.cw) | A pattern from the command line, not from the source |
+| [`csvreport.cw`](examples/real/csvreport.cw) | Reading a data file and totalling it by field |
+| [`expr.cw`](examples/real/expr.cw) | Recursive descent — sum of terms, term of factors |
+| [`json.cw`](examples/real/json.cw) | Re-indenting a JSON document by walking it |
+
+### Programs that do the hard part
+
+[`examples/systems/`](examples/systems/) is five programs written the way a C
+programmer writes them: no library doing the interesting work, and a check at
+the end that recomputes the answer some other way.
+
+| Program | What it shows |
+| --- | --- |
+| [`bitset.cw`](examples/systems/bitset.cw) | Sixty-four flags to a word, and a prime sieve on top |
+| [`crc32.cw`](examples/systems/crc32.cw) | The checksum in every zip file, table-driven, verified bit by bit |
+| [`hashtable.cw`](examples/systems/hashtable.cw) | Open addressing and the probing that makes it work |
+| [`malloc.cw`](examples/systems/malloc.cw) | A first-fit heap allocator, and the fragmentation it cannot prevent |
+| [`vm.cw`](examples/systems/vm.cw) | A stack machine, an assembler, and four programs to run |
+
+### Programs that talk to other machines
+
+[`examples/net/`](examples/net/) is four programs that open real sockets. Their
+output cannot be a checked-in file — it depends on who answers — so
+`net_examples_test.go` drives each one against a peer written in Go, and
+`make net` runs that.
+
+| Program | What it shows |
+| --- | --- |
+| [`echo-server.cw`](examples/net/echo-server.cw) | A server that answers every line, numbered |
+| [`http-get.cw`](examples/net/http-get.cw) | Speaking HTTP/1.0 by hand and reporting the status line |
+| [`chat-server.cw`](examples/net/chat-server.cw) | Many clients, one thread, a deadline per socket |
+| [`netbench.cw`](examples/net/netbench.cw) | The CCWIG half of the benchmark below |
+
+[`apps/todo/todo.cw`](apps/todo/todo.cw) is the other kind of program: a tool
+you run, with subcommands (`add`, `list`, `done`, `remove`, `prune`), a `-f`
+option naming its file, and an exit status. It has no recorded output either;
+[`todo_app_test.go`](todo_app_test.go) checks every command by running it and
+reading the file it leaves behind. `make todo` runs it.
+
 [`examples/animate/maze.cw`](examples/animate/maze.cw) is the same maze animated
 in the terminal, frame by frame (`make animate` plays it), and
 [`examples/huge/maze.cw`](examples/huge/maze.cw) is the same maze grown to a
@@ -150,6 +214,92 @@ it has built, and checks the count.
 in a specific way, so you can see what the messages look like before you meet
 them for real.
 
+## The network benchmark
+
+[`reports/`](reports/) holds a measurement of the one thing a language like this
+is usually assumed to be bad at: moving bytes over a socket. Two clients make
+the same exchange over loopback TCP — send a payload, wait for the same number
+of bytes back — against the same echo server. One client is written in CCWIG
+and run by the interpreter; the other is the same exchange written in Go and
+run as a separate process. The Go rows are the control, so the difference
+between the two columns is the interpreter and not the machine.
+
+![What a round trip costs, by message size](reports/round-trip.svg)
+
+| message size | CCWIG µs/round trip | Go µs/round trip | CCWIG MB/s | Go MB/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 64 B | 16.7 | 14.5 | 7.3 | 8.4 |
+| 256 B | 16.8 | 14.6 | 29.1 | 33.3 |
+| 1,024 B | 18.1 | 14.8 | 107.7 | 132.2 |
+| 4,096 B | 21.2 | 15.2 | 367.7 | 513.1 |
+| 16,384 B | 34.0 | 18.1 | 919.9 | 1,721.9 |
+
+At 16 KiB messages a round trip costs the CCWIG client **1.87× what it costs
+the Go one**. The gap widens with the message because the part that grows is
+the part the interpreter does: building, sending, receiving and comparing a
+string a byte at a time, with two builtin calls per round trip. That is the
+price of no compiler, measured rather than asserted.
+
+But loopback is the one network on which that share is large, and the one
+network on which it does not matter to anybody. So the harness asks the second
+question too: the same two clients against a server that waits before it
+answers, which is what a round trip over a real network costs.
+
+![The interpreter's share of a round trip, against server delay](reports/interpreter-share.svg)
+
+| server delay | CCWIG µs/round trip | Go µs/round trip | difference | CCWIG's share |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 ms | 17.9 | 14.6 | 3.3 | 18.6% |
+| 1 ms | 1,427.5 | 1,400.0 | 27.5 | 1.9% |
+| 10 ms | 11,932.3 | 11,884.7 | 47.6 | 0.4% |
+| 50 ms | 51,916.7 | 51,809.9 | 106.7 | 0.2% |
+
+On loopback the interpreter is about a fifth of the wait. At 50 ms of delay the
+widest difference anywhere in the table — 107 µs — is **0.21% of what a person
+would wait**. And past the first row those differences are not even
+measurements: forty round trips cannot resolve a few microseconds, because one
+scheduling hiccup costs more than the thing being looked for, so the sweep
+states the largest difference it saw as a ceiling rather than pretending to a
+value. The only row with enough round trips in it to be read as a number is
+the one with no delay, and that is the row the main table is made of: the sweep
+does not measure it again, it reads the 1,024-byte rows out of `netbench.csv`,
+which is why the two files agree about it and why that CSV carries the client's
+own clock in microseconds rather than milliseconds.
+
+Every figure is the median of three runs, after a discarded warm-up, on one
+machine, and the reports say which machine:
+
+    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report
+
+One run of `make report` writes seven files — two Markdown reports, the two
+CSVs behind them, the two figures above, and a page holding all six:
+
+| File | What it is |
+| --- | --- |
+| [`netbench.md`](reports/netbench.md), [`latency.md`](reports/latency.md) | The readable reports |
+| [`netbench.csv`](reports/netbench.csv), [`latency.csv`](reports/latency.csv) | The data behind them, one row per measurement |
+| [`round-trip.svg`](reports/round-trip.svg), [`interpreter-share.svg`](reports/interpreter-share.svg) | The figures, as SVG files you can open on their own |
+| [`reports/index.html`](reports/index.html) | One self-contained page with both figures and both tables |
+
+Nothing in either report is a number a program chose: the clients count the
+bytes they moved, and the harness fails the run if a single reply did not match
+its request byte for byte. The figures are not drawn by hand either — the same
+program that writes the CSV draws the chart from the same rows, so a figure
+cannot go on saying what an earlier run measured.
+
+`.github/workflows/bench.yml` runs the same thing on a GitHub runner and
+publishes the page, so the numbers can be re-measured somewhere other than the
+computer they were taken on. It runs on every push to `main`, and the page is at
+**<https://utkarshdeoli.github.io/ccwig/>** — the reports in this repository are
+from the hand run the machine line above names, and the page is what a runner
+measured afterwards. The run also carries the reports away as a downloadable
+artifact.
+
+Sockets, the benchmark and the to-do tool were designed before any of them were
+written. [`docs/design/networking-and-apps.md`](docs/design/networking-and-apps.md)
+is that design — what the language was missing, what was added to it, and what
+was deliberately left out.
+
 ## Project layout
 
 | Path | Contents |
@@ -161,7 +311,9 @@ them for real.
 | `internal/object` | Runtime values and scopes |
 | `internal/evaluator` | Tree-walking evaluation and builtins |
 | `internal/interp` | Lex, parse and evaluate together, plus the REPL |
+| `internal/sockets` | The descriptor table behind the `net_*` builtins |
 | `cmd/ccwig` | Command-line entry point |
+| `cmd/netbench` | The benchmark harness that writes `reports/` |
 
 ## Make targets
 
@@ -176,21 +328,34 @@ them for real.
 | `make animate` | Play the animated maze example |
 | `make huge` | Run the very large maze example |
 | `make bench` | Run the benchmarks |
+| `make report` | Run the network benchmark and write `reports/` |
+| `make report-quick` | The same, short enough to check the harness itself |
+| `make net` | Run the networking examples against real peers |
+| `make todo` | Run the to-do list application |
 | `make fuzz` | Run every fuzz target for 30s each |
 | `make pi` | Cross-compile for the Raspberry Pi |
 | `make help` | List every target |
 
 ## Tests and benchmarks
 
-`go test ./...` runs 203 test functions, which come to 760 cases counting
-subtests. `integration_test.go` runs all eight programs in `examples/` and
-compares what each prints against its checked-in `.out` file, and checks that
-each program in `examples/errors/` fails with the message it is supposed to and
-names the file it came from.
+`go test ./...` runs 294 test functions, which come to 870 cases counting
+subtests. `integration_test.go` runs the nineteen programs in `examples/`,
+`examples/real/` and `examples/systems/` and compares what each prints against
+its checked-in `.out` file — with the arguments in its `.args` file and the
+input in its `.in` file where it has them — and checks that each program in
+`examples/errors/` fails with the message it is supposed to and names the file
+it came from.
 
-Two programs in subdirectories are deliberately not among those eight, because
-there is no single output to compare: the animation draws hundreds of frames,
-and the huge maze is meant to be resized. `TestAnimatedExample` and
+The programs whose answer does not fit in a file are held to something better
+than a golden file: `net_examples_test.go` runs the four `examples/net/`
+programs against peers written in Go, `todo_app_test.go` runs the to-do tool
+and reads the file it leaves behind, and `real` and `systems` tests recompute
+what can be recomputed independently, in Go, rather than trusting a program's
+own report of its own work.
+
+Two programs in subdirectories are deliberately not among those nineteen,
+because there is no single output to compare: the animation draws hundreds of
+frames, and the huge maze is meant to be resized. `TestAnimatedExample` and
 `TestHugeExample` check what those two are supposed to do instead.
 
 Seven fuzz targets cover the three phases: that the lexer always advances and
