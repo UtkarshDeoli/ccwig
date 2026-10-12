@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/xml"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -239,7 +240,9 @@ func checkFigures(t *testing.T, out string, rows []row) {
 		if r.impl != "ccwig" {
 			continue
 		}
-		if !hasValueNear(barValues, r.published, 0.05) {
+
+		// The bar labels are written to one decimal of a microsecond.
+		if !hasValueNear(barValues, r.published, halfUnit(1)) {
 			t.Errorf("the figure does not label the CCWIG bar at %d bytes with the %.2f µs the CSV publishes",
 				r.size, r.published)
 		}
@@ -254,16 +257,24 @@ func checkFigures(t *testing.T, out string, rows []row) {
 	lineValues := labeledValues(line, "t-value")
 
 	for _, r := range readLatencyCSV(t, filepath.Join(out, "latency.csv")) {
-		share := r.gapShare()
+		// The share the CSV publishes, not one computed from the two columns
+		// beside it. The difference here is not pedantry: on the loopback row the
+		// gap is about three microseconds out of eighteen, so rounding those two
+		// columns to the hundredth of a microsecond they are published at moves
+		// the quotient by six hundredths of a percent - more than the half unit
+		// the figure's label is allowed to round by, and enough to fail this
+		// check while the figure and the report agreed. It failed exactly there.
+		share := r.publishedShare
 
-		// Half of the last digit the label states, whichever of the two
-		// precisions percent() chose for it.
-		tolerance := 0.05
+		// The precision the label states, so the tolerance is half of the last
+		// digit it wrote: a tenth of a percent above one percent, a hundredth
+		// below it, which is the branch percent() takes.
+		decimals := 1
 		if share < 1 {
-			tolerance = 0.005
+			decimals = 2
 		}
 
-		if !hasValueNear(lineValues, share, tolerance) {
+		if !hasValueNear(lineValues, share, halfUnit(decimals)) {
 			t.Errorf("the figure does not label the %s row with the %s the latency CSV publishes",
 				delayLabel(r.delayMS), percent(share))
 		}
@@ -304,6 +315,51 @@ func hasValueNear(values []float64, want, tolerance float64) bool {
 		}
 	}
 	return false
+}
+
+// halfUnit is the tolerance for comparing a number a report computed with the
+// same number as a figure or a table rounded it: half of the last digit those
+// wrote, plus a hair.
+//
+// The hair is the whole point of the function. A tolerance of exactly half a
+// unit is not enough, and fails in the one case a reader would never call a
+// disagreement: the value sitting on the boundary. 41.15 µs labelled to one
+// decimal is "41.1", because the nearest float64 to 41.15 is 41.149999999999999
+// and rounds down - and the difference is then 0.05000000000000426, a shade
+// over the 0.05 that was supposed to admit it. This test failed in CI on
+// exactly that, on a runner whose round trip happened to land on the boundary,
+// while the same figure on the machine it was written on did not.
+func halfUnit(decimals int) float64 {
+	half := 0.5 / math.Pow(10, float64(decimals))
+	return half + half/1000
+}
+
+// TestHalfUnitAdmitsARoundingBoundary is the CI failure written down, so that it
+// is a case the suite knows about rather than one it happened to survive.
+//
+// The figure labels the number it measured - 41.1502 µs, say - and writes it to
+// one decimal: "41.2". The CSV publishes the same number to two: "41.15". So the
+// label sits 0.05000000000000426 away from the report, which is the half unit
+// the tolerance was set to and then a hair more, because 41.2 is not exactly
+// 41.2 in binary. A tolerance of exactly half a unit throws out the label it was
+// written to accept, on the runs where the measurement happens to land on the
+// boundary. It did that in CI and not on the machine the test was written on.
+func TestHalfUnitAdmitsARoundingBoundary(t *testing.T) {
+	if !hasValueNear([]float64{41.1}, 41.15, halfUnit(1)) {
+		t.Error("a label rounded down from the boundary it sits on is rejected")
+	}
+	if !hasValueNear([]float64{41.2}, 41.15, halfUnit(1)) {
+		t.Error("a label rounded up from the boundary it sits on is rejected")
+	}
+
+	// And the tolerance still has to be tight enough to be worth having: a
+	// figure drawn from a run a whole microsecond away is a different run.
+	if hasValueNear([]float64{42.0}, 41.15, halfUnit(1)) {
+		t.Error("a label a microsecond out is accepted")
+	}
+	if hasValueNear([]float64{41.0}, 41.15, halfUnit(1)) {
+		t.Error("a label a tenth of a microsecond out is accepted at one decimal")
+	}
 }
 
 // checkSweepRows reads the latency sweep back and checks the claim the sweep

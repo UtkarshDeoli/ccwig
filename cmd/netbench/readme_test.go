@@ -1,7 +1,6 @@
 package main
 
 import (
-	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -166,18 +165,15 @@ func number(t *testing.T, cell string) int {
 // precision the readme publishes it to.
 //
 // The readme is a table for a reader and the report is data, so the readme
-// rounds - one decimal, or a whole number for the differences. The tolerance
-// is therefore half of the last digit the readme wrote: what is being ruled out
-// is a number pasted from an older run, not a rounding.
+// rounds - one decimal, or a whole number for the differences. The tolerance is
+// therefore half of the last digit the readme wrote: what is being ruled out is
+// a number pasted from an older run, not a rounding.
 func want(t *testing.T, cell, where string, got float64) {
 	t.Helper()
 
 	published, decimals := cellNumber(t, cell)
 
-	tolerance := 0.5 / math.Pow(10, float64(decimals))
-	tolerance += tolerance / 1000 // for a report value sitting on a rounding boundary
-
-	if diff := published - got; diff > tolerance || diff < -tolerance {
+	if diff := published - got; diff > halfUnit(decimals) || diff < -halfUnit(decimals) {
 		t.Errorf("the readme says %s and %s says %.2f - the readme quotes a run that is not the one in reports/", cell, where, got)
 	}
 }
