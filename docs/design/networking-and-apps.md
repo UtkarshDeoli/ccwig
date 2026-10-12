@@ -1,7 +1,10 @@
 # Design: growing CCWIG from a language into a toolkit
 
 Date: 2026-10-12
-Status: approved and in progress
+Status: built — all seven items below are in the tree, with the order of work
+at the end of this file showing what landed where. Kept as the record of what
+was decided and why, rather than of what the code now looks like: the code is
+the record of that.
 
 ## Why
 

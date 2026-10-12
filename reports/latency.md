@@ -11,16 +11,18 @@ meet that server, in the same order, on the same machine, with the same wait in
 front of each reply; the only thing that differs between the two rows of a line is
 the language the client was written in.
 
+![The interpreter's share of a round trip, against server delay](interpreter-share.svg)
+
 | server delay | CCWIG µs/round trip | Go µs/round trip | difference | CCWIG's share |
 | ---: | ---: | ---: | ---: | ---: |
-| 0 ms | 18.1 | 14.8 | 3.3 | 18.27% |
-| 1 ms | 1409.5 | 1395.8 | 13.7 | 0.97% |
-| 10 ms | 11826.5 | 11818.4 | 8.0 | 0.07% |
-| 50 ms | 52093.3 | 51913.8 | 179.5 | 0.34% |
+| 0 ms | 17.9 | 14.6 | 3.3 | 18.62% |
+| 1 ms | 1,427.5 | 1,400.0 | 27.5 | 1.93% |
+| 10 ms | 11,932.3 | 11,884.7 | 47.6 | 0.40% |
+| 50 ms | 51,916.7 | 51,809.9 | 106.7 | 0.21% |
 
-The round trip grows from **18 µs** to **52093 µs** down this table, and the
-difference between the two clients never exceeded **180 µs** of it. At the longest
-round trip here - 50 ms of delay - 180 µs is **0.34%** of what a person would wait.
+The round trip grows from **18 µs** to **51.9 ms** down this table, and the
+difference between the two clients never exceeded **107 µs** of it. At the longest
+round trip here - 50 ms of delay - 107 µs is **0.21%** of what a person would wait.
 
 That is a bound rather than a measurement, and deliberately. The difference is
 divided by the number of round trips, so the fewer of them a row has, the more of
@@ -30,8 +32,8 @@ the language. A row that short states a ceiling the noise decided, which is stil
 an honest thing to state, and is the only honest thing that length supports.
 
 The one row where the difference is a number rather than a ceiling is the first,
-because it is the one row with enough round trips in it: **3.3 µs** of the 18.1 µs
-round trip, or **18.3%**. That is the interpreter, measured where it can be: on
+because it is the one row with enough round trips in it: **3.3 µs** of the 17.9 µs
+round trip, or **18.6%**. That is the interpreter, measured where it can be: on
 loopback, which is the only network where the interpreter is not the small part.
 
 ## What is measured
@@ -76,7 +78,7 @@ make report
 
 ## The machine this ran on
 
-    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 57d5dc9 · 2026-10-11 23:31 UTC, median of 3 runs · run by hand with make report
+    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report
 
 ## Mismatches
 

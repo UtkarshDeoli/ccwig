@@ -73,7 +73,9 @@ report: build  ## Run the network benchmark and write reports/
 		-ccwig $(BIN_DIR)/$(BINARY) \
 		-commit "$$(git rev-parse --short HEAD)" \
 		-note "run by hand with make report"
-	@echo "reports/netbench.md, reports/netbench.csv, reports/latency.md, reports/latency.csv and reports/index.html are up to date"
+	@echo "up to date: reports/netbench.md, reports/netbench.csv, reports/latency.md,"
+	@echo "            reports/latency.csv, reports/round-trip.svg,"
+	@echo "            reports/interpreter-share.svg, reports/index.html"
 
 report-quick: build  ## Same, but short enough to check the harness itself
 	go run ./cmd/netbench -quick -ccwig $(BIN_DIR)/$(BINARY) -out $(shell mktemp -d)

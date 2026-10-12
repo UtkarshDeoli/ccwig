@@ -4,8 +4,9 @@ CCWIG is a small programming language with a C accent, and this repository is
 the whole of it: a hand-written lexer, a recursive-descent parser and a
 tree-walking evaluator, with a command-line interface and a REPL on top.
 
-It is about 5,800 lines of Go behind 7,700 lines of tests, and it has no
-dependencies at all — the module imports nothing beyond the standard library.
+It is about 7,000 lines of Go behind 8,300 lines of tests — every line, comments
+and blanks included, which is what `wc -l` says — and it has no dependencies at
+all: the module imports nothing beyond the standard library.
 
 **On the name.** CCWIG stands for "C-like Compiler Written in Go", but what is
 here is an *interpreter*: the syntax tree is walked directly, and there is no
@@ -223,13 +224,15 @@ and run by the interpreter; the other is the same exchange written in Go and
 run as a separate process. The Go rows are the control, so the difference
 between the two columns is the interpreter and not the machine.
 
+![What a round trip costs, by message size](reports/round-trip.svg)
+
 | message size | CCWIG µs/round trip | Go µs/round trip | CCWIG MB/s | Go MB/s |
 | ---: | ---: | ---: | ---: | ---: |
-| 64 B | 16.7 | 14.0 | 7.3 | 8.7 |
-| 256 B | 16.6 | 14.2 | 29.5 | 34.3 |
-| 1,024 B | 18.5 | 15.0 | 105.8 | 130.1 |
-| 4,096 B | 21.5 | 15.2 | 362.6 | 512.9 |
-| 16,384 B | 34.0 | 18.1 | 920.4 | 1,723.5 |
+| 64 B | 16.7 | 14.5 | 7.3 | 8.4 |
+| 256 B | 16.8 | 14.6 | 29.1 | 33.3 |
+| 1,024 B | 18.1 | 14.8 | 107.7 | 132.2 |
+| 4,096 B | 21.2 | 15.2 | 367.7 | 513.1 |
+| 16,384 B | 34.0 | 18.1 | 919.9 | 1,721.9 |
 
 At 16 KiB messages a round trip costs the CCWIG client **1.87× what it costs
 the Go one**. The gap widens with the message because the part that grows is
@@ -242,15 +245,18 @@ network on which it does not matter to anybody. So the harness asks the second
 question too: the same two clients against a server that waits before it
 answers, which is what a round trip over a real network costs.
 
+![The interpreter's share of a round trip, against server delay](reports/interpreter-share.svg)
+
 | server delay | CCWIG µs/round trip | Go µs/round trip | difference | CCWIG's share |
 | ---: | ---: | ---: | ---: | ---: |
-| 0 ms | 18.1 | 14.8 | 3.3 | 18.3% |
-| 1 ms | 1,409 | 1,396 | 14 | 1.0% |
-| 10 ms | 11,826 | 11,818 | 8 | 0.1% |
-| 50 ms | 52,093 | 51,914 | 180 | 0.3% |
+| 0 ms | 17.9 | 14.6 | 3.3 | 18.6% |
+| 1 ms | 1,427.5 | 1,400.0 | 27.5 | 1.9% |
+| 10 ms | 11,932.3 | 11,884.7 | 47.6 | 0.4% |
+| 50 ms | 51,916.7 | 51,809.9 | 106.7 | 0.2% |
 
-On loopback the interpreter is a fifth of the wait. At 50 ms of delay it is
-**0.3% of it** — and past the first row the differences are not even
+On loopback the interpreter is about a fifth of the wait. At 50 ms of delay the
+widest difference anywhere in the table — 107 µs — is **0.21% of what a person
+would wait**. And past the first row those differences are not even
 measurements: forty round trips cannot resolve a few microseconds, because one
 scheduling hiccup costs more than the thing being looked for, so the sweep
 states the largest difference it saw as a ceiling rather than pretending to a
@@ -263,22 +269,34 @@ own clock in microseconds rather than milliseconds.
 Every figure is the median of three runs, after a discarded warm-up, on one
 machine, and the reports say which machine:
 
-    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 57d5dc9 · 2026-10-11 23:31 UTC, median of 3 runs · run by hand with make report
+    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report
 
-One run of `make report` writes five files:
-[`netbench.md`](reports/netbench.md) and [`latency.md`](reports/latency.md) are
-the readable versions, [`netbench.csv`](reports/netbench.csv) and
-[`latency.csv`](reports/latency.csv) are the data behind them, and
-[`reports/index.html`](reports/index.html) is a self-contained page with the
-throughput drawn to scale. Nothing in either report is a number a program
-chose: the clients count the bytes they moved, and the harness fails the run if
-a single reply did not match its request byte for byte.
+One run of `make report` writes seven files — two Markdown reports, the two
+CSVs behind them, the two figures above, and a page holding all six:
+
+| File | What it is |
+| --- | --- |
+| [`netbench.md`](reports/netbench.md), [`latency.md`](reports/latency.md) | The readable reports |
+| [`netbench.csv`](reports/netbench.csv), [`latency.csv`](reports/latency.csv) | The data behind them, one row per measurement |
+| [`round-trip.svg`](reports/round-trip.svg), [`interpreter-share.svg`](reports/interpreter-share.svg) | The figures, as SVG files you can open on their own |
+| [`reports/index.html`](reports/index.html) | One self-contained page with both figures and both tables |
+
+Nothing in either report is a number a program chose: the clients count the
+bytes they moved, and the harness fails the run if a single reply did not match
+its request byte for byte. The figures are not drawn by hand either — the same
+program that writes the CSV draws the chart from the same rows, so a figure
+cannot go on saying what an earlier run measured.
 
 `.github/workflows/bench.yml` runs the same thing on a GitHub runner and
 publishes the page, so the numbers can be re-measured somewhere other than the
 computer they were taken on. Once it has run, the page is at
-**<https://utkarshdeoli.github.io/ccwig/>**, and the run carries the three files
+**<https://utkarshdeoli.github.io/ccwig/>**, and the run carries the reports
 away as a downloadable artifact.
+
+Sockets, the benchmark and the to-do tool were designed before any of them were
+written. [`docs/design/networking-and-apps.md`](docs/design/networking-and-apps.md)
+is that design — what the language was missing, what was added to it, and what
+was deliberately left out.
 
 ## Project layout
 
@@ -318,7 +336,7 @@ away as a downloadable artifact.
 
 ## Tests and benchmarks
 
-`go test ./...` runs 286 test functions, which come to 862 cases counting
+`go test ./...` runs 294 test functions, which come to 870 cases counting
 subtests. `integration_test.go` runs the nineteen programs in `examples/`,
 `examples/real/` and `examples/systems/` and compares what each prints against
 its checked-in `.out` file — with the arguments in its `.args` file and the

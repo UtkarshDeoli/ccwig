@@ -9,18 +9,20 @@ Go and run as a separate process. They are the control: without them a latency
 figure says how fast the machine is, and with them it says how much of the time
 is the language.
 
+![What a round trip costs, by message size](round-trip.svg)
+
 | client | message size | round trips | wall ms | µs per round trip | round trips/s | MB/s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| ccwig | 64 | 20,000 | 334 | 16.7 | 59,922 | 7.3 |
-| go | 64 | 20,000 | 280 | 14.0 | 71,494 | 8.7 |
-| ccwig | 256 | 20,000 | 331 | 16.6 | 60,383 | 29.5 |
-| go | 256 | 20,000 | 285 | 14.2 | 70,265 | 34.3 |
-| ccwig | 1,024 | 15,000 | 277 | 18.5 | 54,161 | 105.8 |
-| go | 1,024 | 15,000 | 225 | 15.0 | 66,613 | 130.1 |
-| ccwig | 4,096 | 10,000 | 215 | 21.5 | 46,412 | 362.6 |
-| go | 4,096 | 10,000 | 152 | 15.2 | 65,657 | 512.9 |
-| ccwig | 16,384 | 5,000 | 170 | 34.0 | 29,452 | 920.4 |
-| go | 16,384 | 5,000 | 91 | 18.1 | 55,150 | 1723.5 |
+| ccwig | 64 | 20,000 | 333 | 16.7 | 60,017 | 7.3 |
+| go | 64 | 20,000 | 291 | 14.5 | 68,826 | 8.4 |
+| ccwig | 256 | 20,000 | 336 | 16.8 | 59,511 | 29.1 |
+| go | 256 | 20,000 | 293 | 14.6 | 68,292 | 33.3 |
+| ccwig | 1,024 | 15,000 | 272 | 18.1 | 55,129 | 107.7 |
+| go | 1,024 | 15,000 | 222 | 14.8 | 67,707 | 132.2 |
+| ccwig | 4,096 | 10,000 | 212 | 21.2 | 47,060 | 367.7 |
+| go | 4,096 | 10,000 | 152 | 15.2 | 65,681 | 513.1 |
+| ccwig | 16,384 | 5,000 | 170 | 34.0 | 29,437 | 919.9 |
+| go | 16,384 | 5,000 | 91 | 18.1 | 55,100 | 1,721.9 |
 
 At 16,384-byte messages a round trip costs the CCWIG client **1.87× what it costs
 the Go one**. The difference is not the socket: both clients make the same system
@@ -31,7 +33,9 @@ comparing payloads a byte at a time.
 ## What is measured
 
 - **wall ms** is the whole client process, from `fork` to exit: reading the source,
-  parsing it, connecting, and doing the work.
+  parsing it, connecting, and doing the work. The CSV carries it to the microsecond,
+  which is the resolution of the clock it was read from, so that the µs-per-round-trip
+  column beside it is what a reader gets by dividing the two published numbers.
 - **µs per round trip** is `wall ms` divided by the number of round trips. It is the
   number a person means by latency.
 - **MB/s** counts both directions, because every byte is sent and comes back.
@@ -71,7 +75,7 @@ go run ./cmd/netbench -out reports
 
 ## The machine this ran on
 
-    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 57d5dc9 · 2026-10-11 23:31 UTC, median of 3 runs · run by hand with make report
+    go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report
 
 ## Mismatches
 

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="428" viewBox="0 0 760 428" class="chart" role="img" aria-label="Line chart of the interpreter&#39;s share of a round trip, in percent, against server delay.">
+<style>
+  .chart { --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+           --grid:#e1e0d9; --axis:#c3c2b7; --s1:#2a78d6; --s2:#eb6834; }
+  @media (prefers-color-scheme: dark) {
+    .chart { --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7;
+             --grid:#2c2c2a; --axis:#383835; --s1:#3987e5; --s2:#d95926; }
+  }
+  .chart text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .t-title { font-size:15px; font-weight:600; fill:var(--ink); }
+  .t-sub   { font-size:12.5px; fill:var(--muted); }
+  .t-tick  { font-size:11.5px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+  /* Value labels wear a halo of the surface they are drawn on. A label that
+     sits above its point is still in the road of the line arriving at it from
+     a steeper neighbour, or of a gridline, and half a label struck through is
+     a wrong number. The halo is the surface colour rather than a white, so it
+     is invisible on the page and still invisible on the dark one. */
+  .t-value { font-size:12px; fill:var(--ink2); font-variant-numeric:tabular-nums;
+             paint-order:stroke fill; stroke:var(--surface); stroke-width:3px;
+             stroke-linejoin:round; }
+  .t-key   { font-size:12px; fill:var(--ink2); }
+  .t-foot  { font-size:11px; fill:var(--muted); }
+  .grid { stroke:var(--grid); stroke-width:1; }
+  .axis { stroke:var(--axis); stroke-width:1; }
+  .s1 { fill:var(--s1); }
+  .s2 { fill:var(--s2); }
+  .line1 { stroke:var(--s1); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; fill:none; }
+  .dot1 { fill:var(--s1); stroke:var(--surface); stroke-width:2; }
+</style>
+<g class="chart">
+<rect x="0.5" y="0.5" width="759" height="427.0" rx="8" fill="var(--surface)" stroke="var(--grid)"/>
+<text class="t-title" x="28" y="30">The interpreter&#39;s share of a round trip, once the network costs something</text>
+<text class="t-sub" x="28" y="52">CCWIG&#39;s round trip less Go&#39;s, as a percentage of CCWIG&#39;s, against a server told to wait before each reply.</text>
+<line class="axis" x1="104.0" y1="324.0" x2="688.0" y2="324.0"/>
+<text class="t-tick" x="90.0" y="328.0" text-anchor="end">0%</text>
+<line class="grid" x1="104.0" y1="266.0" x2="688.0" y2="266.0"/>
+<text class="t-tick" x="90.0" y="270.0" text-anchor="end">5%</text>
+<line class="grid" x1="104.0" y1="208.0" x2="688.0" y2="208.0"/>
+<text class="t-tick" x="90.0" y="212.0" text-anchor="end">10%</text>
+<line class="grid" x1="104.0" y1="150.0" x2="688.0" y2="150.0"/>
+<text class="t-tick" x="90.0" y="154.0" text-anchor="end">15%</text>
+<line class="grid" x1="104.0" y1="92.0" x2="688.0" y2="92.0"/>
+<text class="t-tick" x="90.0" y="96.0" text-anchor="end">20%</text>
+<path class="line1" d="M 177.0 108.1 L 323.0 301.6 L 469.0 319.4 L 615.0 321.6"/>
+<line class="axis" x1="104.0" y1="92.0" x2="104.0" y2="324.0"/>
+<circle class="dot1" cx="177.0" cy="108.1" r="5"/><title>18.6% of a 18 µs round trip at a loopback delay</title>
+<circle class="dot1" cx="323.0" cy="301.6" r="5"/><title>1.9% of a 1.4 ms round trip at a 1 ms delay</title>
+<circle class="dot1" cx="469.0" cy="319.4" r="5"/><title>0.40% of a 11.9 ms round trip at a 10 ms delay</title>
+<circle class="dot1" cx="615.0" cy="321.6" r="5"/><title>0.21% of a 51.9 ms round trip at a 50 ms delay</title>
+<text class="t-value" x="177.0" y="132.1" text-anchor="middle">18.6%</text>
+<text class="t-tick" x="177.0" y="350" text-anchor="middle">loopback</text>
+<text class="t-tick" x="177.0" y="366" text-anchor="middle">18 µs</text>
+<text class="t-value" x="323.0" y="287.6" text-anchor="middle">1.9%</text>
+<text class="t-tick" x="323.0" y="350" text-anchor="middle">1 ms</text>
+<text class="t-tick" x="323.0" y="366" text-anchor="middle">1.4 ms</text>
+<text class="t-value" x="469.0" y="305.4" text-anchor="middle">0.40%</text>
+<text class="t-tick" x="469.0" y="350" text-anchor="middle">10 ms</text>
+<text class="t-tick" x="469.0" y="366" text-anchor="middle">11.9 ms</text>
+<text class="t-value" x="615.0" y="307.6" text-anchor="middle">0.21%</text>
+<text class="t-tick" x="615.0" y="350" text-anchor="middle">50 ms</text>
+<text class="t-tick" x="615.0" y="366" text-anchor="middle">51.9 ms</text>
+<text class="t-tick" x="396.0" y="392" text-anchor="middle">server delay, and what a round trip cost at it</text>
+<text class="t-foot" x="28" y="414">go 1.24.4 · darwin/arm64 · 10 CPUs · commit 9fca157 · 2026-10-12 04:50 UTC, median of 3 runs · run by hand with make report</text>
+</g>
+</svg>
